@@ -156,6 +156,36 @@ pub enum FxOp {
         brightness: f32,
         blend: f32,
     },
+    Twirl {
+        cx: f32,
+        cy: f32,
+        angle: f32,
+        radius: f32,
+    },
+    WaveWarp {
+        height: f32,
+        width: f32,
+        ux: f32,
+        uy: f32,
+        phase: f32,
+    },
+    LensDistortion {
+        curvature: f32,
+        cx: f32,
+        cy: f32,
+        norm: f32,
+    },
+    Basic3D {
+        swivel: f32,
+        tilt: f32,
+        distance: f32,
+    },
+    BevelAlpha {
+        thickness: f32,
+        lx: f32,
+        ly: f32,
+        intensity: f32,
+    },
     /// Three box passes per axis approximating a Gaussian (radii per pass; empty: axis untouched).
     Gaussian {
         rx: Vec<u32>,
@@ -287,6 +317,11 @@ pub const GPU_EFFECTS: &[&str] = &[
     "circle",
     "grid",
     "lens_flare",
+    "twirl",
+    "wave_warp",
+    "lens_distortion",
+    "basic_3d",
+    "bevel_alpha",
     "gaussian_blur",
     "gaussian_blur_legacy",
     "camera_blur",
@@ -486,6 +521,48 @@ impl FxOp {
                     brightness: f(e, "brightness", cx) / 100.0,
                     blend: f(e, "blend", cx) / 100.0,
                 }
+            }
+            "twirl" => {
+                let image = Image { w, h, px: Vec::new() };
+                let c = point(e, "center", cx, &image);
+                FxOp::Twirl {
+                    cx: c.x as f32,
+                    cy: c.y as f32,
+                    angle: (f(e, "angle", cx) as f64).to_radians() as f32,
+                    radius: f(e, "radius", cx) / 100.0 * w.min(h) as f32,
+                }
+            }
+            "wave_warp" => {
+                let height = f(e, "height", cx) * cx.px_scale;
+                let width = (f(e, "width", cx) * cx.px_scale).max(1.0);
+                let dir = (f(e, "direction", cx) as f64).to_radians();
+                let phase = cx.seconds * f(e, "speed", cx) as f64 * std::f64::consts::TAU;
+                FxOp::WaveWarp {
+                    height,
+                    width,
+                    ux: dir.sin() as f32,
+                    uy: -(dir.cos() as f32),
+                    phase: phase as f32,
+                }
+            }
+            "lens_distortion" => {
+                let image = Image { w, h, px: Vec::new() };
+                let curvature = f(e, "curvature", cx) / 100.0;
+                let center_x = w as f32 / 2.0 + f(e, "h_decentering", cx) / 100.0 * w as f32 / 2.0;
+                let center_y = h as f32 / 2.0 + f(e, "v_decentering", cx) / 100.0 * h as f32 / 2.0;
+                let norm = ((w as f32 / 2.0).hypot(h as f32 / 2.0)).max(1e-6);
+                let _ = image;
+                FxOp::LensDistortion { curvature, cx: center_x, cy: center_y, norm }
+            }
+            "basic_3d" => FxOp::Basic3D {
+                swivel: (f(e, "swivel", cx) as f64).to_radians() as f32,
+                tilt: (f(e, "tilt", cx) as f64).to_radians() as f32,
+                distance: f(e, "distance", cx) * cx.px_scale,
+            },
+            "bevel_alpha" => {
+                let th = f(e, "thickness", cx) * cx.px_scale;
+                let ang = (f(e, "angle", cx) as f64).to_radians();
+                FxOp::BevelAlpha { thickness: th, lx: ang.cos() as f32, ly: -(ang.sin() as f32), intensity: f(e, "intensity", cx) / 100.0 }
             }
             "gaussian_blur" | "gaussian_blur_legacy" => {
                 let r = f(e, "blurriness", cx) * cx.px_scale * 0.5;
@@ -768,6 +845,11 @@ impl FxOp {
             FxOp::Circle { cx, cy, radius, color, opacity } => fin(&[*cx, *cy, *radius, *opacity]) && fin(color),
             FxOp::Grid { size, border, color, opacity } => fin(&[*size, *border, *opacity]) && fin(color),
             FxOp::LensFlare { cx, cy, brightness, blend } => fin(&[*cx, *cy, *brightness, *blend]),
+            FxOp::Twirl { cx, cy, angle, radius } => fin(&[*cx, *cy, *angle, *radius]),
+            FxOp::WaveWarp { height, width, ux, uy, phase } => fin(&[*height, *width, *ux, *uy, *phase]) && *width >= 1.0,
+            FxOp::LensDistortion { curvature, cx, cy, norm } => fin(&[*curvature, *cx, *cy, *norm]) && *norm > 0.0,
+            FxOp::Basic3D { swivel, tilt, distance } => fin(&[*swivel, *tilt, *distance]),
+            FxOp::BevelAlpha { thickness, lx, ly, intensity } => fin(&[*thickness, *lx, *ly, *intensity]),
             FxOp::Gaussian { .. } => true,
             FxOp::DirectionalBlur { dx, dy, .. } => fin(&[*dx, *dy]),
             FxOp::Unsharp { amount, threshold, .. } => fin(&[*amount, *threshold]),
@@ -1117,6 +1199,77 @@ impl FxOp {
                         let p = &mut row[x * 4..x * 4 + 4];
                         for k in 0..3 {
                             p[k] += add[k] * br * (1.0 - blend) * p[3].max(0.0);
+                        }
+                    }
+                });
+            }
+            FxOp::Twirl { cx, cy, angle, radius } => {
+                let (cx, cy, angle, radius) = (*cx as f64, *cy as f64, *angle as f64, *radius as f64);
+                crate::effects::warp(img, |x, y| {
+                    let (dx, dy) = (x - cx, y - cy);
+                    let d = (dx * dx + dy * dy).sqrt();
+                    if d >= radius {
+                        return (x, y);
+                    }
+                    let k = 1.0 - d / radius;
+                    let a = angle * k * k;
+                    let (sn, co) = a.sin_cos();
+                    (cx + dx * co - dy * sn, cy + dx * sn + dy * co)
+                });
+            }
+            FxOp::WaveWarp { height, width, ux, uy, phase } => {
+                let (height, width, ux, uy, phase) = (*height as f64, *width as f64, *ux as f64, *uy as f64, *phase as f64);
+                crate::effects::warp(img, |x, y| {
+                    let along = x * ux + y * uy;
+                    let off = height * (along / width * std::f64::consts::TAU - phase).sin();
+                    (x - uy * off, y + ux * off)
+                });
+            }
+            FxOp::LensDistortion { curvature, cx, cy, norm } => {
+                let (k, cx, cy, norm) = (*curvature as f64, *cx as f64, *cy as f64, *norm as f64);
+                crate::effects::warp(img, |x, y| {
+                    let (dx, dy) = ((x - cx) / norm, (y - cy) / norm);
+                    let r2 = dx * dx + dy * dy;
+                    let scale = 1.0 - k * r2;
+                    (cx + dx * scale * norm, cy + dy * scale * norm)
+                });
+            }
+            FxOp::Basic3D { swivel, tilt, distance } => {
+                let (sw, tl, dist) = (*swivel as f64, *tilt as f64, *distance as f64);
+                let (w, h) = (img.w as f64, img.h as f64);
+                let focal = w.max(h) * 1.2;
+                crate::effects::warp_opt(img, |x, y| {
+                    let (px, py) = (x - w / 2.0, y - h / 2.0);
+                    let (ss, cs) = sw.sin_cos();
+                    let (st, ct) = tl.sin_cos();
+                    let n = [ss * ct, -st, cs * ct];
+                    let u = [cs, 0.0, -ss];
+                    let v = [ss * st, ct, cs * st];
+                    let z0 = focal + dist * 10.0;
+                    let dir = [px, py, focal];
+                    let denom = n[0] * dir[0] + n[1] * dir[1] + n[2] * dir[2];
+                    if denom.abs() < 1e-9 { return None; }
+                    let tt = (n[2] * z0) / denom;
+                    if tt <= 0.0 { return None; }
+                    let hit = [dir[0] * tt, dir[1] * tt, dir[2] * tt - z0];
+                    let su = hit[0] * u[0] + hit[1] * u[1] + hit[2] * u[2];
+                    let sv = hit[0] * v[0] + hit[1] * v[1] + hit[2] * v[2];
+                    Some((su + w / 2.0, sv + h / 2.0))
+                });
+            }
+            FxOp::BevelAlpha { thickness, lx, ly, intensity } => {
+                let (th, lx, ly, inten) = (*thickness, *lx, *ly, *intensity);
+                let src = img.clone();
+                let w = img.w;
+                img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+                    for x in 0..w {
+                        let a = |dx: f32, dy: f32| src.sample_bilinear_clamped(x as f32 + 0.5 + dx, y as f32 + 0.5 + dy)[3];
+                        let gx = a(th, 0.0) - a(-th, 0.0);
+                        let gy = a(0.0, th) - a(0.0, -th);
+                        let shade = -(gx * lx + gy * ly) * inten;
+                        let p = &mut row[x * 4..x * 4 + 4];
+                        for k in 0..3 {
+                            p[k] = (p[k] + shade * p[3]).clamp(0.0, p[3]);
                         }
                     }
                 });
