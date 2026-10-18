@@ -967,6 +967,11 @@ fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
         }
         case OP_SHADOW_COMBINE: {
             let shadow = ld(p);
+            if u.i1.x != 0u {
+                // Shadow Only: finish the pass without compositing the original, but still
+                // end the preserved-original scope for the next effect in the chain.
+                return shadow;
+            }
             let original = textureLoad(aux, p, 0);
             // The CPU reference places the original over the shadow using Normal compositing.
             return original + shadow * (1.0 - original.a);
