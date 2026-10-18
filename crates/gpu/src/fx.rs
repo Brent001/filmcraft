@@ -203,11 +203,11 @@ fn steps(op: &FxOp) -> Vec<Step> {
             for s in &mut out[start..] {
                 s.preserve_original = true;
             }
-            if !only {
-                let mut combine = step(OP_SHADOW_COMBINE, [0; 4], &[]);
-                combine.combine = true;
-                out.push(combine);
-            } else if let Some(last) = out.last_mut() {
+            // Always terminate the preserved-original scope, including shadow-only mode. This
+            // matters when another effect follows Drop Shadow in the same chain.
+            let mut combine = step(OP_SHADOW_COMBINE, [*only as u32, 0, 0, 0], &[]);
+            combine.combine = true;
+            out.push(combine); else if let Some(last) = out.last_mut() {
                 last.release_original_after = true;
             }
         }
