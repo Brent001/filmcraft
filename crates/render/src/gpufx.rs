@@ -124,6 +124,12 @@ pub enum FxOp {
         threshold: f32,
         cutoff: f32,
     },
+    Noise {
+        amount: f32,
+        colored: bool,
+        clip: bool,
+        seed: u64,
+    },
     FourColorGradient {
         colors: [[f32; 3]; 4],
         opacity: f32,
@@ -311,6 +317,7 @@ pub const GPU_EFFECTS: &[&str] = &[
     "emboss",
     "replicate",
     "strobe",
+    "noise",
     "luma_key",
     "four_color_gradient",
     "ramp",
@@ -468,6 +475,12 @@ impl FxOp {
                 }
             }
             "luma_key" => FxOp::LumaKey { threshold: f(e, "threshold", cx) / 100.0, cutoff: f(e, "cutoff", cx) / 100.0 },
+            "noise" => FxOp::Noise {
+                amount: f(e, "amount", cx) / 100.0,
+                colored: b(e, "color"),
+                clip: b(e, "clip"),
+                seed: crate::effects::noise_frame_seed(cx),
+            },
             "four_color_gradient" => {
                 let cols = [color(e, "c1", cx), color(e, "c2", cx), color(e, "c3", cx), color(e, "c4", cx)];
                 FxOp::FourColorGradient {
@@ -839,6 +852,7 @@ impl FxOp {
             FxOp::Emboss { dx, dy, contrast, blend } => fin(&[*dx, *dy, *contrast, *blend]),
             FxOp::Strobe { color, blend, .. } => fin(color) && blend.is_finite(),
             FxOp::LumaKey { threshold, cutoff } => fin(&[*threshold, *cutoff]),
+            FxOp::Noise { amount, .. } => amount.is_finite(),
             FxOp::FourColorGradient { colors, opacity, blend_exp } => colors.iter().all(|c| fin(c)) && fin(&[*opacity, *blend_exp]),
             FxOp::Ramp { start, end, start_color, end_color, blend, .. } =>
                 fin(start) && fin(end) && fin(start_color) && fin(end_color) && blend.is_finite(),
@@ -1102,6 +1116,38 @@ impl FxOp {
                     };
                     for v in p.iter_mut() {
                         *v *= a;
+                    }
+                });
+            }
+            FxOp::Noise { amount, colored, clip, seed } => {
+                let (amt, colored, clip, seed) = (*amount, *colored, *clip, *seed);
+                let w = img.w;
+                img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+                    for x in 0..w {
+                        let p = &mut row[x * 4..x * 4 + 4];
+                        let a = p[3];
+                        if a <= 0.0 {
+                            continue;
+                        }
+                        let n0 = crate::effects::hash3(x, y, seed) - 0.5;
+                        let ns = if colored {
+                            [
+                                n0,
+                                crate::effects::hash3(x, y, seed.wrapping_add(7777)) - 0.5,
+                                crate::effects::hash3(x, y, seed.wrapping_add(99_991)) - 0.5,
+                            ]
+                        } else {
+                            [n0; 3]
+                        };
+                        let c = enc([p[0] / a, p[1] / a, p[2] / a]);
+                        let mut out = [c[0] + ns[0] * amt, c[1] + ns[1] * amt, c[2] + ns[2] * amt];
+                        if clip {
+                            out = out.map(|v| v.clamp(0.0, 1.0));
+                        }
+                        let out = dec(out);
+                        p[0] = out[0] * a;
+                        p[1] = out[1] * a;
+                        p[2] = out[2] * a;
                     }
                 });
             }
