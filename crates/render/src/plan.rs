@@ -236,19 +236,16 @@ pub fn plan_source_item(
 
     let width = (frame.width as usize / decimation).max(1);
     let height = (frame.height as usize / decimation).max(1);
-    let fx = LayerFx { size: (width as u32, height as u32), decimation: decimation as u32, ops: Vec::new() };
-    Some(FramePlan::Layers {
-        width,
-        height,
-        layers: vec![PlanLayer {
-            frame: frame.clone(),
-            matrix: Affine::IDENTITY,
-            opacity: 1.0,
-            blend: Blend::Normal,
-            fx: Some(Arc::new(fx)),
-            input,
-        }],
-    })
+    // The common case needs no resampling: draw the decoded frame directly, avoiding an
+    // unnecessary Rgba32Float effects target and source pass. Keep the GPU working-image path
+    // for actual decimation so its box average stays identical to the CPU reference.
+    let layer = if decimation == 1 {
+        PlanLayer { frame: frame.clone(), matrix: Affine::IDENTITY, opacity: 1.0, blend: Blend::Normal, fx: None, input }
+    } else {
+        let fx = LayerFx { size: (width as u32, height as u32), decimation: decimation as u32, ops: Vec::new() };
+        PlanLayer { frame: frame.clone(), matrix: Affine::IDENTITY, opacity: 1.0, blend: Blend::Normal, fx: Some(Arc::new(fx)), input }
+    };
+    Some(FramePlan::Layers { width, height, layers: vec![layer] })
 }
 
 /// Plan the frame at timeline `t`.
