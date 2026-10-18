@@ -179,6 +179,7 @@ fn cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>, bool)> {
         ("drop_shadow", vec![("color", col(0.1, 0.05, 0.02)), ("opacity", fl(70.0)), ("direction", fl(135.0)), ("distance", fl(8.0)), ("softness", fl(3.0)), ("only", ParamValue::Bool(false))], false),
         ("drop_shadow", vec![("opacity", fl(100.0)), ("direction", fl(-90.0)), ("distance", fl(14.0)), ("softness", fl(0.0)), ("only", ParamValue::Bool(true))], false),
         ("drop_shadow", vec![("opacity", fl(45.0)), ("distance", fl(2.0)), ("softness", fl(15.0)), ("only", ParamValue::Bool(true))], false),
+        ("drop_shadow", vec![("color", col(0.2, 0.2, 0.2)), ("opacity", fl(35.0)), ("distance", fl(0.0)), ("softness", fl(0.0)), ("only", ParamValue::Bool(false))], false),
         ("gaussian_blur", vec![("blurriness", fl(0.0))], false),
         ("gaussian_blur", vec![("blurriness", fl(5.0))], false),
         ("gaussian_blur", vec![("blurriness", fl(5.0)), ("repeat_edge", ParamValue::Bool(true))], false),
