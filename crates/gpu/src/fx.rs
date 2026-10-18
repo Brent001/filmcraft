@@ -497,6 +497,9 @@ impl FxStage {
         });
         let views: Vec<wgpu::TextureView> = targets.iter().map(|t| t.1.clone()).collect();
         let mut dispatches = Vec::with_capacity(all.len());
+        // The same 2–3 pooled textures are reused throughout a chain. Cache bind groups by
+        // texture routing and vary only the dynamic uniform offset between operations.
+        let mut bind_groups: HashMap<(usize, usize, Option<usize>), wgpu::BindGroup> = HashMap::new();
         let mut cur = 0usize;
         // Unsharp: the image its blur started from (kept while its blur passes run)
         let mut orig: Option<usize> = None;
@@ -507,9 +510,10 @@ impl FxStage {
             }
             let keep = if s.preserve_original || s.combine { orig } else { None };
             let dst = (0..n).find(|k| *k != cur && Some(*k) != keep)?;
-            let aux = match (s.combine, orig) {
-                (true, Some(o)) => views.get(o)?,
-                _ => dummy,
+            let aux_index = if s.combine { orig } else { None };
+            let aux = match aux_index {
+                Some(o) => views.get(o)?,
+                None => dummy,
             };
             let byte_offset = pass_index.checked_mul(uniform_stride)?;
             let uniform_offset = u32::try_from(byte_offset).ok()?;
@@ -522,23 +526,30 @@ impl FxStage {
                 uniform_data[cursor..cursor + 4].copy_from_slice(&v.to_le_bytes());
                 cursor += 4;
             }
-            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("fx"),
-                layout: &self.bgl,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: &uniforms,
-                            offset: 0,
-                            size: std::num::NonZeroU64::new(UNIFORM_BYTES as u64),
-                        }),
-                    },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(views.get(cur)?) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(views.get(dst)?) },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(aux) },
-                ],
-            });
+            let bg_key = (cur, dst, aux_index);
+            let bg = if let Some(bg) = bind_groups.get(&bg_key) {
+                bg.clone()
+            } else {
+                let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("fx"),
+                    layout: &self.bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &uniforms,
+                                offset: 0,
+                                size: std::num::NonZeroU64::new(UNIFORM_BYTES as u64),
+                            }),
+                        },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(views.get(cur)?) },
+                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(views.get(dst)?) },
+                        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(aux) },
+                    ],
+                });
+                bind_groups.insert(bg_key, bg.clone());
+                bg
+            };
             let groups = if s.run {
                 let lines = if s.i1[2] != 0 { w } else { h };
                 (lines.div_ceil(64), 1)
