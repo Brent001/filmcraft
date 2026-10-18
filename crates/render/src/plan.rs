@@ -206,6 +206,11 @@ pub fn plan_frame(project: &Project, seq_id: ItemId, t: Tick, opts: RenderOption
     let Some(seq) = project.sequence(seq_id) else { return FramePlan::Image(crate::Image::new(1, 1)) };
     let (w, h) = output_size(seq, opts.scale);
     if whole_frame_on_cpu(project, seq, t) {
+        if !seq.settings.color.is_plain() {
+            log::debug!("CPU frame fallback at {:?}: sequence colour pipeline is HDR or wide-gamut", t);
+        } else {
+            log::debug!("CPU frame fallback at {:?}: an adjustment layer or unsupported transition is active", t);
+        }
         return FramePlan::Image(crate::render_sequence(project, seq_id, t, opts, sources));
     }
     let mut layers = PlanStack::default();
