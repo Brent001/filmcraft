@@ -1,0 +1,38 @@
+name: GPU effect parity (Windows)
+
+on:
+  push:
+    branches:
+      - perf/gpu-effect-previews
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "crates/gpu/**"
+      - "crates/render/**"
+      - "crates/ui-egui/**"
+      - ".github/workflows/gpu-effects-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-dx12-fxc:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check effect compositor and UI
+        run: cargo check -p filmcraft-gpu -p filmcraft-ui-egui
+
+      - name: Run every GPU/CPU effect parity case through DX12 + FXC
+        run: cargo test -p filmcraft-gpu gpu_effects_match_cpu_exactly_with_fxc -- --nocapture
