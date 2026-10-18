@@ -276,6 +276,12 @@ fn prepare_layers(layers: &[PlanLayer]) -> PreparedPlan {
 }
 
 impl GpuCompositor {
+    /// Whether the standard-effect compute pipeline was created successfully on this device.
+    /// A working compositor alone does not imply that pixel effects are GPU-accelerated.
+    pub fn effects_accelerated(&self) -> bool {
+        self.fx.is_some()
+    }
+
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("filmcraft-composite"),
