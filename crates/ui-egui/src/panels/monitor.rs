@@ -219,9 +219,13 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
                 .map(|p| (key, p))
                 .or_else(|| app.frames.nearest_plan(key, 6))
                 .or_else(|| asked.iter().find_map(|k| app.frames.get_plan(k).map(|p| (*k, p))));
+            let slot = if which == Which::Program { 0 } else { 1 };
             match found {
-                Some((k, plan)) => (app.gpu_present(k, &plan).map(|(id, _)| id), Some(k)),
-                None => (app.gpu.as_ref().and_then(|g| g.texture), app.gpu.as_ref().and_then(|g| g.last_key)),
+                Some((k, plan)) => (app.gpu_present_for_slot(k, &plan, slot).map(|(id, _)| id), Some(k)),
+                None => {
+                    let (texture, key) = app.gpu.as_ref().map_or((None, None), |g| g.last_presentation(slot));
+                    (texture, key)
+                }
             }
         } else {
             cpu_texture(app, &ctx, &tex_name, key, &asked, display)
