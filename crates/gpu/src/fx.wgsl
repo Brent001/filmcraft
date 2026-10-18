@@ -17,7 +17,7 @@ struct U {
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var src: texture_2d<f32>;
 @group(0) @binding(2) var dst: texture_storage_2d<rgba32float, write>;
-// Unsharp Mask: the image before blurring.
+// Original input kept alive for compound effects (Unsharp Mask, Drop Shadow).
 @group(0) @binding(3) var aux: texture_2d<f32>;
 
 const OP_BRIGHTNESS_CONTRAST: u32 = 1u;
