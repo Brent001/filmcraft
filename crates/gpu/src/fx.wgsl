@@ -212,7 +212,7 @@ fn noise_hash64(x: u32, y: u32, seed: vec2<u32>) -> f32 {
 }
 
 // `f32::powf` for x >= 0 (WGSL leaves pow(0, y) undefined).
-fn powf(x: f32, y: f32) -> f32 {
+fn pow(x: f32, y: f32) -> f32 {
     if x == 0.0 {
         if y == 0.0 {
             return 1.0;
@@ -448,12 +448,12 @@ fn color_op(op: u32, c: vec3<f32>) -> vec3<f32> {
         case OP_GAMMA: {
             let e = enc(c);
             let g = u.p0.x;
-            return dec(vec3(powf(max(e.x, 0.0), g), powf(max(e.y, 0.0), g), powf(max(e.z, 0.0), g)));
+            return dec(vec3(pow(max(e.x, 0.0), g), pow(max(e.y, 0.0), g), pow(max(e.z, 0.0), g)));
         }
         case OP_LEVELS: {
             let ib = u.p0.x; let iw = u.p0.y; let ob = u.p0.z; let ow = u.p0.w; let g = u.p1.x;
             let v = clamp((enc(c) - ib) / (iw - ib), vec3(0.0), vec3(1.0));
-            return dec(ob + vec3(powf(v.x, g), powf(v.y, g), powf(v.z, g)) * (ow - ob));
+            return dec(ob + vec3(pow(v.x, g), pow(v.y, g), pow(v.z, g)) * (ow - ob));
         }
         case OP_EXTRACT: {
             let lo = u.p0.x; let hi = u.p0.y; let soft = u.p0.z;
@@ -485,7 +485,7 @@ fn color_op(op: u32, c: vec3<f32>) -> vec3<f32> {
             let e = enc(c);
             let s = u.p0.xyz; let o = u.p1.xyz; let pw = max(u.p2.xyz, vec3(0.0)); let sat = u.p0.w;
             let q = clamp(e * s + o, vec3(0.0), vec3(1.0));
-            let v = vec3(powf(q.x, pw.x), powf(q.y, pw.y), powf(q.z, pw.z));
+            let v = vec3(pow(q.x, pw.x), pow(q.y, pw.y), pow(q.z, pw.z));
             let l = luma709(v);
             return dec(clamp(l + sat * (v - l), vec3(0.0), vec3(1.0)));
         }
@@ -793,10 +793,10 @@ fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
             let b = max(length(pc - vec2<f32>(f32(s.x) * 0.75, f32(s.y) * 0.25)), 1.0);
             let c = max(length(pc - vec2<f32>(f32(s.x) * 0.25, f32(s.y) * 0.75)), 1.0);
             let d = max(length(pc - vec2<f32>(f32(s.x) * 0.75, f32(s.y) * 0.75)), 1.0);
-            let wa = 1.0 / powf(a, expn);
-            let wb = 1.0 / powf(b, expn);
-            let wc = 1.0 / powf(c, expn);
-            let wd = 1.0 / powf(d, expn);
+            let wa = 1.0 / pow(a, expn);
+            let wb = 1.0 / pow(b, expn);
+            let wc = 1.0 / pow(c, expn);
+            let wd = 1.0 / pow(d, expn);
             let rgb = dec((c1 * wa + c2 * wb + c3 * wc + c4 * wd) / (wa + wb + wc + wd));
             let op = u.p3.x;
             let o = ld(p);
@@ -1063,7 +1063,7 @@ fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
                 nx *= 1.0 + (aspect - 1.0) * round;
             }
             let p_exp = select(2.0, 2.0 + (-round) * 6.0, round < 0.0);
-            let d = powf(powf(abs(nx), p_exp) + powf(abs(ny), p_exp), 1.0 / p_exp) / powf(2.0, 1.0 / p_exp);
+            let d = pow(pow(abs(nx), p_exp) + pow(abs(ny), p_exp), 1.0 / p_exp) / pow(2.0, 1.0 / p_exp);
             let edge = smoothstep_fx(mid - feather * 0.5, mid + feather * 0.5, d);
             let c = o.rgb / a;
             let ec = enc(c);
