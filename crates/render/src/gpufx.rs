@@ -1415,7 +1415,7 @@ impl FxOp {
                     p[3] = a;
                 });
                 crate::effects::box_blur(&mut sh, rx, ry, false);
-                if !only {
+                if !*only {
                     crate::blend::composite(&mut sh, img, 1.0, crate::blend::Blend::Normal);
                 }
                 *img = sh;
