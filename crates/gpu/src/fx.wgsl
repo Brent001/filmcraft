@@ -66,6 +66,7 @@ const OP_WAVE_WARP: u32 = 44u;
 const OP_LENS_DISTORTION: u32 = 45u;
 const OP_BASIC_3D: u32 = 46u;
 const OP_BEVEL_ALPHA: u32 = 47u;
+const OP_NOISE: u32 = 48u;
 
 fn size() -> vec2<i32> {
     return vec2<i32>(i32(u.i0.y), i32(u.i0.z));
@@ -159,6 +160,52 @@ fn luma709(c: vec3<f32>) -> f32 {
 
 fn edge_luma(p: vec2<i32>) -> f32 {
     return luma709(ld_clamped(p).rgb);
+}
+
+// u64 is represented as (low32, high32), allowing the deterministic CPU noise hash to
+// run identically on WGSL implementations that do not expose a native 64-bit integer type.
+fn mul_hi_u32(a: u32, b: u32) -> u32 {
+    let a0 = a & 0xffffu;
+    let a1 = a >> 16u;
+    let b0 = b & 0xffffu;
+    let b1 = b >> 16u;
+    let w0 = a0 * b0;
+    let t = a1 * b0 + (w0 >> 16u);
+    let mid1 = t & 0xffffu;
+    let mid2 = a0 * b1 + mid1;
+    return a1 * b1 + (t >> 16u) + (mid2 >> 16u);
+}
+
+fn mul64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
+    return vec2<u32>(a.x * b.x, mul_hi_u32(a.x, b.x) + a.x * b.y + a.y * b.x);
+}
+
+fn shr64(v: vec2<u32>, n: u32) -> vec2<u32> {
+    if n == 0u {
+        return v;
+    }
+    if n < 32u {
+        return vec2<u32>((v.x >> n) | (v.y << (32u - n)), v.y >> n);
+    }
+    return vec2<u32>(v.y >> (n - 32u), 0u);
+}
+
+fn add_seed64(seed: vec2<u32>, amount: u32) -> vec2<u32> {
+    let lo = seed.x + amount;
+    let carry = select(0u, 1u, lo < seed.x);
+    return vec2<u32>(lo, seed.y + carry);
+}
+
+fn noise_hash64(x: u32, y: u32, seed: vec2<u32>) -> f32 {
+    let x64 = vec2<u32>(x, 0u);
+    let y64 = vec2<u32>(y, 0u);
+    var h = mul64(x64, vec2<u32>(0x7F4A7C15u, 0x9E3779B9u))
+          ^ mul64(y64, vec2<u32>(0x27D4EB4Fu, 0xC2B2AE3Du))
+          ^ mul64(seed, vec2<u32>(0x9E3779F9u, 0x165667B1u));
+    h = h ^ shr64(h, 31u);
+    h = mul64(h, vec2<u32>(0x1CE4E5B9u, 0xBF58476Du));
+    h = h ^ shr64(h, 29u);
+    return f32(h.y >> 8u) / 16777216.0;
 }
 
 // `f32::powf` for x >= 0 (WGSL leaves pow(0, y) undefined).
@@ -678,6 +725,27 @@ fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
                 k = (l - cutoff) / max(threshold - cutoff, 1e-3);
             }
             return o * k;
+        }
+        case OP_NOISE: {
+            let o = ld(p);
+            if o.a <= 0.0 {
+                return o;
+            }
+            let seed = vec2<u32>(u.i1.z, u.i1.w);
+            let x = u32(p.x);
+            let y = u32(p.y);
+            let n0 = noise_hash64(x, y, seed) - 0.5;
+            var noise = vec3<f32>(n0);
+            if u.i1.x != 0u {
+                noise.y = noise_hash64(x, y, add_seed64(seed, 7777u)) - 0.5;
+                noise.z = noise_hash64(x, y, add_seed64(seed, 99991u)) - 0.5;
+            }
+            var rgb = enc(o.rgb / o.a) + noise * u.p0.x;
+            if u.i1.y != 0u {
+                rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+            }
+            let out_rgb = dec(rgb);
+            return vec4<f32>(out_rgb * o.a, o.a);
         }
         case OP_FOUR_COLOR_GRADIENT: {
             let c1 = vec3<f32>(u.p0.x, u.p0.y, u.p0.z);
