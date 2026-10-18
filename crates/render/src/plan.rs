@@ -171,7 +171,12 @@ fn simple_transition(id: &str) -> bool {
 /// with effects off). None: the clip is rendered on the CPU.
 fn gpu_chain<'a>(project: &Project, item: &'a TrackItem, opts: RenderOptions) -> Option<Vec<&'a filmcraft_project::EffectInstance>> {
     let is_media = project.item(item.item).is_some_and(|p| matches!(p.kind, ItemKind::Media(_) | ItemKind::Subclip { .. }));
-    if !is_media || item.has_opacity_masks() {
+    if !is_media {
+        log::debug!("GPU effect fallback for item {:?}: only media/subclip layers have a direct GPU source", item.item);
+        return None;
+    }
+    if item.has_opacity_masks() {
+        log::debug!("GPU effect fallback for item {:?}: opacity masks still use the CPU renderer", item.item);
         return None;
     }
     if !opts.effects {
@@ -183,7 +188,12 @@ fn gpu_chain<'a>(project: &Project, item: &'a TrackItem, opts: RenderOptions) ->
             continue;
         }
         let masked = e.masks.iter().any(|m| m.mode != filmcraft_project::MaskMode::None);
-        if masked || !crate::gpufx::GPU_EFFECTS.contains(&e.effect.as_str()) {
+        if masked {
+            log::debug!("GPU effect fallback for '{}': effect masks still use the CPU renderer", e.effect);
+            return None;
+        }
+        if !crate::gpufx::GPU_EFFECTS.contains(&e.effect.as_str()) {
+            log::debug!("GPU effect fallback for '{}': no GPU compute kernel is registered for this effect", e.effect);
             return None;
         }
         chain.push(e);
