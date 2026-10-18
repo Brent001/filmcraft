@@ -56,6 +56,13 @@ const OP_MOSAIC: u32 = 32;
 const OP_FIND_EDGES: u32 = 33;
 const OP_EMBOSS: u32 = 34;
 const OP_REPLICATE: u32 = 35;
+const OP_STROBE: u32 = 36;
+const OP_LUMA_KEY: u32 = 37;
+const OP_FOUR_COLOR_GRADIENT: u32 = 38;
+const OP_RAMP: u32 = 39;
+const OP_CIRCLE: u32 = 40;
+const OP_GRID: u32 = 41;
+const OP_LENS_FLARE: u32 = 42;
 
 type Target = (wgpu::Texture, wgpu::TextureView);
 
@@ -142,6 +149,34 @@ fn steps(op: &FxOp) -> Vec<Step> {
         FxOp::FindEdges { invert, blend } => out.push(step(OP_FIND_EDGES, [*invert as u32, 0, 0, 0], &[*blend])),
         FxOp::Emboss { dx, dy, contrast, blend } => out.push(step(OP_EMBOSS, [0; 4], &[*dx, *dy, *contrast, *blend])),
         FxOp::Replicate { n } => out.push(step(OP_REPLICATE, [(*n).clamp(1, 16), 0, 0, 0], &[])),
+        FxOp::Strobe { color, blend, active } => out.push(step(OP_STROBE, [*active as u32, 0, 0, 0], &[color[0], color[1], color[2], *blend])),
+        FxOp::LumaKey { threshold, cutoff } => out.push(step(OP_LUMA_KEY, [0; 4], &[*threshold, *cutoff])),
+        FxOp::FourColorGradient { colors, opacity, blend_exp } => {
+            let p = [
+                colors[0][0], colors[0][1], colors[0][2],
+                colors[1][0], colors[1][1], colors[1][2],
+                colors[2][0], colors[2][1], colors[2][2],
+                colors[3][0], colors[3][1], colors[3][2],
+                *opacity, *blend_exp,
+            ];
+            out.push(step(OP_FOUR_COLOR_GRADIENT, [0; 4], &p));
+        }
+        FxOp::Ramp { start, end, start_color, end_color, radial, blend } => {
+            out.push(step(
+                OP_RAMP,
+                [*radial as u32, 0, 0, 0],
+                &[start[0], start[1], end[0], end[1], start_color[0], start_color[1], start_color[2], end_color[0], end_color[1], end_color[2], *blend],
+            ));
+        }
+        FxOp::Circle { cx, cy, radius, color, opacity } => {
+            out.push(step(OP_CIRCLE, [0; 4], &[*cx, *cy, *radius, color[0], color[1], color[2], *opacity]));
+        }
+        FxOp::Grid { size, border, color, opacity } => {
+            out.push(step(OP_GRID, [0; 4], &[*size, *border, color[0], color[1], color[2], *opacity]));
+        }
+        FxOp::LensFlare { cx, cy, brightness, blend } => {
+            out.push(step(OP_LENS_FLARE, [0; 4], &[*cx, *cy, *brightness, *blend]));
+        }
         FxOp::Gaussian { rx, ry, repeat } => {
             boxes(rx, false, *repeat, &mut out);
             boxes(ry, true, *repeat, &mut out);
