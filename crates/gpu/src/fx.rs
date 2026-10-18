@@ -69,6 +69,7 @@ const OP_LENS_DISTORTION: u32 = 45;
 const OP_BASIC_3D: u32 = 46;
 const OP_BEVEL_ALPHA: u32 = 47;
 const OP_NOISE: u32 = 48;
+const OP_KEY: u32 = 49;
 
 type Target = (wgpu::Texture, wgpu::TextureView);
 
@@ -190,6 +191,9 @@ fn steps(op: &FxOp) -> Vec<Step> {
         FxOp::BevelAlpha { thickness, lx, ly, intensity } => out.push(step(OP_BEVEL_ALPHA, [0; 4], &[*thickness, *lx, *ly, *intensity])),
         FxOp::Noise { amount, colored, clip, seed } => {
             out.push(step(OP_NOISE, [*colored as u32, *clip as u32, *seed as u32, (*seed >> 32) as u32], &[*amount]));
+        }
+        FxOp::Key { key_ycbcr, tolerance, softness, spill, dominant, output } => {
+            out.push(step(OP_KEY, [*dominant, *output, 0, 0], &[key_ycbcr[0], key_ycbcr[1], key_ycbcr[2], *tolerance, *softness, *spill]));
         }
         FxOp::Gaussian { rx, ry, repeat } => {
             boxes(rx, false, *repeat, &mut out);
