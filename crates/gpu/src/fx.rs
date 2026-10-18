@@ -63,6 +63,11 @@ const OP_RAMP: u32 = 39;
 const OP_CIRCLE: u32 = 40;
 const OP_GRID: u32 = 41;
 const OP_LENS_FLARE: u32 = 42;
+const OP_TWIRL: u32 = 43;
+const OP_WAVE_WARP: u32 = 44;
+const OP_LENS_DISTORTION: u32 = 45;
+const OP_BASIC_3D: u32 = 46;
+const OP_BEVEL_ALPHA: u32 = 47;
 
 type Target = (wgpu::Texture, wgpu::TextureView);
 
@@ -177,6 +182,11 @@ fn steps(op: &FxOp) -> Vec<Step> {
         FxOp::LensFlare { cx, cy, brightness, blend } => {
             out.push(step(OP_LENS_FLARE, [0; 4], &[*cx, *cy, *brightness, *blend]));
         }
+        FxOp::Twirl { cx, cy, angle, radius } => out.push(step(OP_TWIRL, [0; 4], &[*cx, *cy, *angle, *radius])),
+        FxOp::WaveWarp { height, width, ux, uy, phase } => out.push(step(OP_WAVE_WARP, [0; 4], &[*height, *width, *ux, *uy, *phase])),
+        FxOp::LensDistortion { curvature, cx, cy, norm } => out.push(step(OP_LENS_DISTORTION, [0; 4], &[*curvature, *cx, *cy, *norm])),
+        FxOp::Basic3D { swivel, tilt, distance } => out.push(step(OP_BASIC_3D, [0; 4], &[*swivel, *tilt, *distance])),
+        FxOp::BevelAlpha { thickness, lx, ly, intensity } => out.push(step(OP_BEVEL_ALPHA, [0; 4], &[*thickness, *lx, *ly, *intensity])),
         FxOp::Gaussian { rx, ry, repeat } => {
             boxes(rx, false, *repeat, &mut out);
             boxes(ry, true, *repeat, &mut out);
