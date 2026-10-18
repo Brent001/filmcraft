@@ -90,6 +90,7 @@ struct Dispatch {
     run: bool,
     bg: wgpu::BindGroup,
     groups: (u32, u32),
+    uniform_offset: u32,
 }
 
 /// The recorded work of one layer's effects (bind groups made; recorded into the frame's encoder
@@ -98,6 +99,8 @@ pub(crate) struct FxJob {
     source_bg: wgpu::BindGroup,
     source_target: wgpu::TextureView,
     dispatches: Vec<Dispatch>,
+    /// One aligned uniform buffer shared by every pass in the effect chain.
+    _uniforms: wgpu::Buffer,
     /// The texture holding the result.
     pub(crate) result: wgpu::TextureView,
     pub(crate) result_texture: wgpu::Texture,
@@ -367,7 +370,7 @@ impl FxStage {
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: None },
                     count: None,
                 },
                 tex(1),
@@ -479,12 +482,25 @@ impl FxStage {
         let all: Vec<Step> = fx.ops.iter().flat_map(steps).collect();
         let n = if all.iter().any(|s| s.combine || s.preserve_original) { 3 } else { 2 };
         let targets = self.targets(device, (w, h), n);
+        // Batch all per-pass parameters into one aligned upload rather than allocating a
+        // uniform buffer and issuing a queue write for every single effect operation.
+        const UNIFORM_BYTES: usize = 128;
+        let alignment = device.limits().min_uniform_buffer_offset_alignment.max(1) as usize;
+        let uniform_stride = UNIFORM_BYTES.div_ceil(alignment) * alignment;
+        let uniform_size = uniform_stride.checked_mul(all.len().max(1))?;
+        let mut uniform_data = vec![0u8; uniform_size];
+        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("filmcraft-fx-uniforms"),
+            size: uniform_size as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let views: Vec<wgpu::TextureView> = targets.iter().map(|t| t.1.clone()).collect();
         let mut dispatches = Vec::with_capacity(all.len());
         let mut cur = 0usize;
         // Unsharp: the image its blur started from (kept while its blur passes run)
         let mut orig: Option<usize> = None;
-        for s in &all {
+        for (pass_index, s) in all.iter().enumerate() {
             // (an Unsharp without blur passes, radius 0, combines the original with itself)
             if (s.preserve_original || s.combine) && orig.is_none() {
                 orig = Some(cur);
@@ -495,25 +511,29 @@ impl FxStage {
                 (true, Some(o)) => views.get(o)?,
                 _ => dummy,
             };
-            let mut bytes = Vec::with_capacity(128);
+            let byte_offset = pass_index.checked_mul(uniform_stride)?;
+            let uniform_offset = u32::try_from(byte_offset).ok()?;
+            let mut cursor = byte_offset;
             for v in [s.code, w, h, 0].iter().chain(&s.i1) {
-                bytes.extend_from_slice(&v.to_le_bytes());
+                uniform_data[cursor..cursor + 4].copy_from_slice(&v.to_le_bytes());
+                cursor += 4;
             }
             for v in &s.p {
-                bytes.extend_from_slice(&v.to_le_bytes());
+                uniform_data[cursor..cursor + 4].copy_from_slice(&v.to_le_bytes());
+                cursor += 4;
             }
-            let buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("fx-u"),
-                size: bytes.len() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&buf, 0, &bytes);
             let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("fx"),
                 layout: &self.bgl,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &uniforms,
+                            offset: 0,
+                            size: std::num::NonZeroU64::new(UNIFORM_BYTES as u64),
+                        }),
+                    },
                     wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(views.get(cur)?) },
                     wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(views.get(dst)?) },
                     wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(aux) },
@@ -525,16 +545,18 @@ impl FxStage {
             } else {
                 (w.div_ceil(16), h.div_ceil(16))
             };
-            dispatches.push(Dispatch { run: s.run, bg, groups });
+            dispatches.push(Dispatch { run: s.run, bg, groups, uniform_offset });
             cur = dst;
             if s.combine || s.release_original_after {
                 orig = None;
             }
         }
+        queue.write_buffer(&uniforms, 0, &uniform_data);
         Some(FxJob {
             source_bg,
             source_target: views.first()?.clone(),
             dispatches,
+            _uniforms: uniforms,
             result: views.get(cur)?.clone(),
             result_texture: targets.get(cur)?.0.clone(),
         })
@@ -566,7 +588,7 @@ impl FxStage {
         let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fx"), timestamp_writes: None });
         for d in &job.dispatches {
             pass.set_pipeline(if d.run { &self.run } else { &self.px });
-            pass.set_bind_group(0, &d.bg, &[]);
+            pass.set_bind_group(0, &d.bg, &[d.uniform_offset]);
             pass.dispatch_workgroups(d.groups.0, d.groups.1, 1);
         }
     }
