@@ -182,15 +182,18 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
         let scale = quantize_scale(res.scale().min(screen_scale.max(1.0 / 32.0)));
         let frame = rate.frame_at(time);
         let rev = match target {
-            Target::Item(i) => app.item_revision(i),
+            Target::Item(i) | Target::ItemPlan(i) => app.item_revision(i),
             _ => app.session.revision,
         };
         let size_key = (scale * 1000.0) as u32;
         let channel = display.is_channel();
-        let use_gpu = which == Which::Program && app.gpu.is_some() && !channel && !crate::panels::menu_dialogs::software_renderer(app);
+        // Both monitors use the GPU frame-plan path when possible. Source frames still fall back
+        // to the CPU reference for colour transforms the compositor cannot reproduce exactly.
+        let use_gpu = app.gpu.is_some() && !channel && !crate::panels::menu_dialogs::software_renderer(app);
         let cpu_target = target;
         let target = match (use_gpu, target) {
             (true, Target::Sequence(s)) => Target::SequencePlan(s),
+            (true, Target::Item(i)) => Target::ItemPlan(i),
             (_, t) => t,
         };
         // Draft decoding (opt-in): only while playing at 1/2 resolution or lower.
