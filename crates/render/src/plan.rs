@@ -201,6 +201,56 @@ fn gpu_chain<'a>(project: &Project, item: &'a TrackItem, opts: RenderOptions) ->
     Some(chain)
 }
 
+/// Build the Source-monitor frame as a one-layer GPU plan when the exact Rec. 709
+/// source decode can be reproduced by the compositor. Unsupported source colour transforms
+/// return None and remain on the CPU reference path.
+pub fn plan_source_item(
+    project: &Project,
+    item: ItemId,
+    t: Tick,
+    scale: f32,
+    sources: &dyn SourceProvider,
+) -> Option<FramePlan> {
+    let pi = project.item(item)?;
+    if matches!(pi.kind, ItemKind::Sequence(_)) {
+        return Some(plan_frame(project, item, t, RenderOptions { scale, ..Default::default() }, sources));
+    }
+
+    let src = sources.source(item)?;
+    let frame = src.video_frame(FrameRequest { time: t, scale }).ok()?;
+    let full_w = src.info().video.as_ref().map_or(frame.width, |v| v.width) as f32;
+    let decimation = crate::decimation(frame.width as f32, full_w * scale).max(1);
+    let pipeline = &filmcraft_color::ColorPipeline::REC709;
+    let source_space = crate::colorman::source_space(project, item, &frame);
+    let needs_management = crate::colorman::needs_management(pipeline, source_space, &frame);
+    let input = if needs_management {
+        crate::colorman::gpu_input(project, item, pipeline, source_space, &frame)
+    } else {
+        None
+    };
+    // Do not approximate source colour management. Log/HDR/RGB cases without an exact
+    // compositor transform continue through render_item() on the CPU.
+    if needs_management && input.is_none() {
+        return None;
+    }
+
+    let width = (frame.width as usize / decimation).max(1);
+    let height = (frame.height as usize / decimation).max(1);
+    let fx = LayerFx { size: (width as u32, height as u32), decimation: decimation as u32, ops: Vec::new() };
+    Some(FramePlan::Layers {
+        width,
+        height,
+        layers: vec![PlanLayer {
+            frame: Arc::new(frame),
+            matrix: Affine::IDENTITY,
+            opacity: 1.0,
+            blend: Blend::Normal,
+            fx: Some(Arc::new(fx)),
+            input,
+        }],
+    })
+}
+
 /// Plan the frame at timeline `t`.
 pub fn plan_frame(project: &Project, seq_id: ItemId, t: Tick, opts: RenderOptions, sources: &dyn SourceProvider) -> FramePlan {
     let Some(seq) = project.sequence(seq_id) else { return FramePlan::Image(crate::Image::new(1, 1)) };
