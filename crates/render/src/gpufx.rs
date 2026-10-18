@@ -115,6 +115,47 @@ pub enum FxOp {
     Replicate {
         n: u32,
     },
+    Strobe {
+        color: [f32; 3],
+        blend: f32,
+        active: bool,
+    },
+    LumaKey {
+        threshold: f32,
+        cutoff: f32,
+    },
+    FourColorGradient {
+        colors: [[f32; 3]; 4],
+        opacity: f32,
+        blend_exp: f32,
+    },
+    Ramp {
+        start: [f32; 2],
+        end: [f32; 2],
+        start_color: [f32; 3],
+        end_color: [f32; 3],
+        radial: bool,
+        blend: f32,
+    },
+    Circle {
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        color: [f32; 3],
+        opacity: f32,
+    },
+    Grid {
+        size: f32,
+        border: f32,
+        color: [f32; 3],
+        opacity: f32,
+    },
+    LensFlare {
+        cx: f32,
+        cy: f32,
+        brightness: f32,
+        blend: f32,
+    },
     /// Three box passes per axis approximating a Gaussian (radii per pass; empty: axis untouched).
     Gaussian {
         rx: Vec<u32>,
@@ -239,6 +280,13 @@ pub const GPU_EFFECTS: &[&str] = &[
     "find_edges",
     "emboss",
     "replicate",
+    "strobe",
+    "luma_key",
+    "four_color_gradient",
+    "ramp",
+    "circle",
+    "grid",
+    "lens_flare",
     "gaussian_blur",
     "gaussian_blur_legacy",
     "camera_blur",
@@ -374,6 +422,73 @@ impl FxOp {
                 }
             }
             "replicate" => FxOp::Replicate { n: f(e, "count", cx).clamp(1.0, 16.0) as u32 },
+            "strobe" => {
+                let period = f(e, "period", cx).max(0.001) as f64;
+                let duration = f(e, "duration", cx) as f64;
+                let c = color(e, "color", cx);
+                FxOp::Strobe {
+                    color: [c[0], c[1], c[2]],
+                    blend: f(e, "blend", cx) / 100.0,
+                    active: cx.seconds % period < duration,
+                }
+            }
+            "luma_key" => FxOp::LumaKey { threshold: f(e, "threshold", cx) / 100.0, cutoff: f(e, "cutoff", cx) / 100.0 },
+            "four_color_gradient" => {
+                use crate::vfx::fv;
+                let cols = [color(e, "c1", cx), color(e, "c2", cx), color(e, "c3", cx), color(e, "c4", cx)];
+                let _ = fv; // colour values use the keyframed effect accessor above
+                FxOp::FourColorGradient {
+                    colors: cols.map(|c| [c[0], c[1], c[2]]),
+                    opacity: f(e, "opacity", cx) / 100.0,
+                    blend_exp: 1.0 + f(e, "blend", cx) / 100.0,
+                }
+            }
+            "ramp" => {
+                let image = Image { w, h, px: Vec::new() };
+                let start = point(e, "start", cx, &image);
+                let end = point(e, "end", cx, &image);
+                let sc = color(e, "start_color", cx);
+                let ec = color(e, "end_color", cx);
+                FxOp::Ramp {
+                    start: [start.x as f32, start.y as f32],
+                    end: [end.x as f32, end.y as f32],
+                    start_color: [sc[0], sc[1], sc[2]],
+                    end_color: [ec[0], ec[1], ec[2]],
+                    radial: choice(e, "shape") == 1,
+                    blend: f(e, "blend", cx) / 100.0,
+                }
+            }
+            "circle" => {
+                let image = Image { w, h, px: Vec::new() };
+                let c = point(e, "center", cx, &image);
+                let col = color(e, "color", cx);
+                FxOp::Circle {
+                    cx: c.x as f32,
+                    cy: c.y as f32,
+                    radius: f(e, "radius", cx) * cx.px_scale,
+                    color: [col[0], col[1], col[2]],
+                    opacity: f(e, "opacity", cx) / 100.0,
+                }
+            }
+            "grid" => {
+                let col = color(e, "color", cx);
+                FxOp::Grid {
+                    size: (f(e, "size", cx) * cx.px_scale).max(1.0),
+                    border: f(e, "border", cx) * cx.px_scale,
+                    color: [col[0], col[1], col[2]],
+                    opacity: f(e, "opacity", cx) / 100.0,
+                }
+            }
+            "lens_flare" => {
+                let image = Image { w, h, px: Vec::new() };
+                let c = point(e, "center", cx, &image);
+                FxOp::LensFlare {
+                    cx: c.x as f32,
+                    cy: c.y as f32,
+                    brightness: f(e, "brightness", cx) / 100.0,
+                    blend: f(e, "blend", cx) / 100.0,
+                }
+            }
             "gaussian_blur" | "gaussian_blur_legacy" => {
                 let r = f(e, "blurriness", cx) * cx.px_scale * 0.5;
                 let dims = choice(e, "dimensions");
@@ -647,6 +762,14 @@ impl FxOp {
             FxOp::Mosaic { .. } | FxOp::Replicate { .. } => true,
             FxOp::FindEdges { blend, .. } => blend.is_finite(),
             FxOp::Emboss { dx, dy, contrast, blend } => fin(&[*dx, *dy, *contrast, *blend]),
+            FxOp::Strobe { color, blend, .. } => fin(color) && blend.is_finite(),
+            FxOp::LumaKey { threshold, cutoff } => fin(&[*threshold, *cutoff]),
+            FxOp::FourColorGradient { colors, opacity, blend_exp } => colors.iter().all(|c| fin(c)) && fin(&[*opacity, *blend_exp]),
+            FxOp::Ramp { start, end, start_color, end_color, blend, .. } =>
+                fin(start) && fin(end) && fin(start_color) && fin(end_color) && blend.is_finite(),
+            FxOp::Circle { cx, cy, radius, color, opacity } => fin(&[*cx, *cy, *radius, *opacity]) && fin(color),
+            FxOp::Grid { size, border, color, opacity } => fin(&[*size, *border, *opacity]) && fin(color),
+            FxOp::LensFlare { cx, cy, brightness, blend } => fin(&[*cx, *cy, *brightness, *blend]),
             FxOp::Gaussian { .. } => true,
             FxOp::DirectionalBlur { dx, dy, .. } => fin(&[*dx, *dy]),
             FxOp::Unsharp { amount, threshold, .. } => fin(&[*amount, *threshold]),
@@ -873,6 +996,130 @@ impl FxOp {
                         let sy = v as f32 + 0.5;
                         let p = src.sample_bilinear_clamped(sx, sy);
                         row[x * 4..x * 4 + 4].copy_from_slice(&p);
+                    }
+                });
+            }
+            FxOp::Strobe { color, blend, active } => {
+                if *active {
+                    let lc = dec(*color);
+                    let blend = *blend;
+                    img.map_rgb(|o, _, _| [lc[0] + (o[0] - lc[0]) * blend, lc[1] + (o[1] - lc[1]) * blend, lc[2] + (o[2] - lc[2]) * blend]);
+                }
+            }
+            FxOp::LumaKey { threshold, cutoff } => {
+                let (th, cut) = (*threshold, *cutoff);
+                img.px.par_chunks_mut(4).for_each(|p| {
+                    if p[3] <= 0.0 {
+                        return;
+                    }
+                    let l = linear_to_srgb(luma709(p[0] / p[3], p[1] / p[3], p[2] / p[3]).max(0.0));
+                    let a = if l <= cut {
+                        0.0
+                    } else if l >= th.max(cut + 1e-3) {
+                        1.0
+                    } else {
+                        (l - cut) / (th - cut).max(1e-3)
+                    };
+                    for v in p.iter_mut() {
+                        *v *= a;
+                    }
+                });
+            }
+            FxOp::FourColorGradient { colors, opacity, blend_exp } => {
+                let (w, h) = (img.w as f32, img.h as f32);
+                let pts = [(0.25 * w, 0.25 * h), (0.75 * w, 0.25 * h), (0.25 * w, 0.75 * h), (0.75 * w, 0.75 * h)];
+                let cs = *colors;
+                let (op, exp) = (*opacity, *blend_exp);
+                crate::effects::fill_over(img, op, |x, y| {
+                    let mut acc = [0.0f32; 3];
+                    let mut wsum = 0.0;
+                    for (i, p) in pts.iter().enumerate() {
+                        let d = ((x - p.0).powi(2) + (y - p.1).powi(2)).sqrt().max(1.0);
+                        let weight = 1.0 / d.powf(exp);
+                        for k in 0..3 {
+                            acc[k] += cs[i][k] * weight;
+                        }
+                        wsum += weight;
+                    }
+                    dec(acc.map(|v| v / wsum))
+                });
+            }
+            FxOp::Ramp { start, end, start_color, end_color, radial, blend } => {
+                let (sx, sy, ex, ey) = (start[0], start[1], end[0], end[1]);
+                let (sc, ec, radial, blend) = (*start_color, *end_color, *radial, *blend);
+                let (vx, vy) = (ex - sx, ey - sy);
+                let len2 = (vx * vx + vy * vy).max(1e-9);
+                crate::effects::fill_over(img, 1.0 - blend, |x, y| {
+                    let t = if radial {
+                        (((x - sx).powi(2) + (y - sy).powi(2)).sqrt() / len2.sqrt())
+                    } else {
+                        ((x - sx) * vx + (y - sy) * vy) / len2
+                    }.clamp(0.0, 1.0);
+                    dec([sc[0] + (ec[0] - sc[0]) * t, sc[1] + (ec[1] - sc[1]) * t, sc[2] + (ec[2] - sc[2]) * t])
+                });
+            }
+            FxOp::Circle { cx, cy, radius, color, opacity } => {
+                let (cx, cy, r, op) = (*cx, *cy, *radius, *opacity);
+                let lc = dec(*color);
+                let w = img.w;
+                img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+                    for x in 0..w {
+                        let d = ((x as f32 + 0.5 - cx).hypot(y as f32 + 0.5 - cy));
+                        let a = (r - d + 0.5).clamp(0.0, 1.0) * op;
+                        if a > 0.0 {
+                            let p = &mut row[x * 4..x * 4 + 4];
+                            for k in 0..3 {
+                                p[k] = lc[k] * a + p[k] * (1.0 - a);
+                            }
+                            p[3] = a + p[3] * (1.0 - a);
+                        }
+                    }
+                });
+            }
+            FxOp::Grid { size, border, color, opacity } => {
+                let (size, border, op) = (*size, *border, *opacity);
+                let lc = dec(*color);
+                let w = img.w;
+                let (ox, oy) = (img.w as f32 / 2.0, img.h as f32 / 2.0);
+                img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+                    for x in 0..w {
+                        let gx = ((x as f32 - ox).rem_euclid(size)).min(size - (x as f32 - ox).rem_euclid(size));
+                        let gy = ((y as f32 - oy).rem_euclid(size)).min(size - (y as f32 - oy).rem_euclid(size));
+                        let a = ((border * 0.5 - gx.min(gy) + 0.5).clamp(0.0, 1.0)) * op;
+                        if a > 0.0 {
+                            let p = &mut row[x * 4..x * 4 + 4];
+                            for k in 0..3 {
+                                p[k] = lc[k] * a + p[k] * (1.0 - a);
+                            }
+                            p[3] = a + p[3] * (1.0 - a);
+                        }
+                    }
+                });
+            }
+            FxOp::LensFlare { cx, cy, brightness, blend } => {
+                let (cx, cy, br, blend) = (*cx as f64, *cy as f64, *brightness, *blend);
+                let (w, h) = (img.w as f64, img.h as f64);
+                let (mx, my) = (w / 2.0, h / 2.0);
+                let scale = w.max(h);
+                let wi = img.w;
+                img.px.par_chunks_mut(wi * 4).enumerate().for_each(|(y, row)| {
+                    for x in 0..wi {
+                        let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
+                        let d = (px - cx).hypot(py - cy) / scale;
+                        let mut add = [1.0f32, 0.9, 0.7].map(|k| k * (0.35 * (-d * 18.0).exp() + 0.08 * (-d * 3.0).exp()) as f32);
+                        for (t, rad, tint) in [(0.5, 0.05, [0.4f32, 0.6, 1.0]), (1.3, 0.03, [1.0, 0.5, 0.3]), (1.7, 0.08, [0.4, 1.0, 0.5])] {
+                            let gx = cx + (mx - cx) * 2.0 * t / 2.0 * 2.0;
+                            let gy = cy + (my - cy) * 2.0 * t / 2.0 * 2.0;
+                            let dd = (px - gx).hypot(py - gy) / scale;
+                            let ring = (1.0 - ((dd - rad) / 0.01).abs()).max(0.0) as f32 * 0.15 + if dd < rad { 0.06 } else { 0.0 };
+                            for k in 0..3 {
+                                add[k] += tint[k] * ring;
+                            }
+                        }
+                        let p = &mut row[x * 4..x * 4 + 4];
+                        for k in 0..3 {
+                            p[k] += add[k] * br * (1.0 - blend) * p[3].max(0.0);
+                        }
                     }
                 });
             }
