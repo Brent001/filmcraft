@@ -61,6 +61,11 @@ const OP_RAMP: u32 = 39u;
 const OP_CIRCLE: u32 = 40u;
 const OP_GRID: u32 = 41u;
 const OP_LENS_FLARE: u32 = 42u;
+const OP_TWIRL: u32 = 43u;
+const OP_WAVE_WARP: u32 = 44u;
+const OP_LENS_DISTORTION: u32 = 45u;
+const OP_BASIC_3D: u32 = 46u;
+const OP_BEVEL_ALPHA: u32 = 47u;
 
 fn size() -> vec2<i32> {
     return vec2<i32>(i32(u.i0.y), i32(u.i0.z));
@@ -768,6 +773,84 @@ fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
             add += vec3<f32>(0.4, 1.0, 0.5) * r2;
             let o = ld(p);
             return vec4<f32>(o.rgb + add * brightness * (1.0 - blend) * max(o.a, 0.0), o.a);
+        }
+        case OP_TWIRL: {
+            let center = u.p0.xy;
+            let angle = u.p0.z;
+            let radius = u.p0.w;
+            let delta = pc - center;
+            let d = length(delta);
+            if d >= radius {
+                return ld(p);
+            }
+            let k = 1.0 - d / radius;
+            let a = angle * k * k;
+            let sn = sin(a);
+            let cs = cos(a);
+            let uv = center + vec2<f32>(delta.x * cs - delta.y * sn, delta.x * sn + delta.y * cs);
+            return sample_bilinear(uv.x, uv.y);
+        }
+        case OP_WAVE_WARP: {
+            let height = u.p0.x;
+            let width = max(u.p0.y, 1.0);
+            let ux = u.p0.z;
+            let uy = u.p0.w;
+            let phase = u.p1.x;
+            let along = pc.x * ux + pc.y * uy;
+            let off = height * sin(along / width * 6.283185307179586 - phase);
+            return sample_bilinear(pc.x - uy * off, pc.y + ux * off);
+        }
+        case OP_LENS_DISTORTION: {
+            let curvature = u.p0.x;
+            let center = u.p0.yz;
+            let norm = max(u.p0.w, 1e-6);
+            let delta = (pc - center) / norm;
+            let r2 = dot(delta, delta);
+            let k = 1.0 - curvature * r2;
+            let uv = center + delta * k * norm;
+            return sample_bilinear(uv.x, uv.y);
+        }
+        case OP_BASIC_3D: {
+            let sw = u.p0.x;
+            let tl = u.p0.y;
+            let dist = u.p0.z;
+            let w = f32(s.x);
+            let h = f32(s.y);
+            let focal = max(w, h) * 1.2;
+            let px = pc.x - w / 2.0;
+            let py = pc.y - h / 2.0;
+            let ss = sin(sw);
+            let cs = cos(sw);
+            let st = sin(tl);
+            let ct = cos(tl);
+            let normal = vec3<f32>(ss * ct, -st, cs * ct);
+            let basis_u = vec3<f32>(cs, 0.0, -ss);
+            let basis_v = vec3<f32>(ss * st, ct, cs * st);
+            let z0 = focal + dist * 10.0;
+            let dir = vec3<f32>(px, py, focal);
+            let denom = dot(normal, dir);
+            if abs(denom) < 1e-9 {
+                return vec4<f32>(0.0);
+            }
+            let tt = (normal.z * z0) / denom;
+            if tt <= 0.0 {
+                return vec4<f32>(0.0);
+            }
+            let hit = dir * tt - vec3<f32>(0.0, 0.0, z0);
+            let su = dot(hit, basis_u);
+            let sv = dot(hit, basis_v);
+            return sample_bilinear(su + w / 2.0, sv + h / 2.0);
+        }
+        case OP_BEVEL_ALPHA: {
+            let thickness = u.p0.x;
+            let lx = u.p0.y;
+            let ly = u.p0.z;
+            let intensity = u.p0.w;
+            let gx = sample_clamped(pc.x + thickness, pc.y).a - sample_clamped(pc.x - thickness, pc.y).a;
+            let gy = sample_clamped(pc.x, pc.y + thickness).a - sample_clamped(pc.x, pc.y - thickness).a;
+            let o = ld(p);
+            let shade = -(gx * lx + gy * ly) * intensity;
+            return vec4<f32>(clamp(o.rgb + vec3<f32>(shade * o.a), vec3<f32>(0.0), vec3<f32>(o.a)), o.a);
         }
         case OP_UNSHARP: {
             // src: the blurred image, aux: the original. Each colour channel on its own, as
