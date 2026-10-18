@@ -241,7 +241,7 @@ pub fn plan_source_item(
         width,
         height,
         layers: vec![PlanLayer {
-            frame: Arc::new(frame),
+            frame: frame.clone(),
             matrix: Affine::IDENTITY,
             opacity: 1.0,
             blend: Blend::Normal,
