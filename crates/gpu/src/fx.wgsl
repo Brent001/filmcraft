@@ -54,6 +54,13 @@ const OP_MOSAIC: u32 = 32u;
 const OP_FIND_EDGES: u32 = 33u;
 const OP_EMBOSS: u32 = 34u;
 const OP_REPLICATE: u32 = 35u;
+const OP_STROBE: u32 = 36u;
+const OP_LUMA_KEY: u32 = 37u;
+const OP_FOUR_COLOR_GRADIENT: u32 = 38u;
+const OP_RAMP: u32 = 39u;
+const OP_CIRCLE: u32 = 40u;
+const OP_GRID: u32 = 41u;
+const OP_LENS_FLARE: u32 = 42u;
 
 fn size() -> vec2<i32> {
     return vec2<i32>(i32(u.i0.y), i32(u.i0.z));
@@ -448,6 +455,13 @@ fn color_op(op: u32, c: vec3<f32>) -> vec3<f32> {
             }
             return dec(v + (repl - v) * k);
         }
+        case OP_STROBE: {
+            if u.i1.x == 0u {
+                return c;
+            }
+            let lc = dec(u.p0.xyz);
+            return lc + (c - lc) * u.p0.w;
+        }
         default: {
             return c;
         }
@@ -640,6 +654,120 @@ fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
             let sx = f32(ux) + 0.5 + (f32(n) - 1.0) * 0.5 / f32(n);
             let sy = f32(vy) + 0.5;
             return sample_clamped(sx, sy);
+        }
+        case OP_LUMA_KEY: {
+            let o = ld(p);
+            if o.a <= 0.0 {
+                return o;
+            }
+            let c = o.rgb / o.a;
+            let l = linear_to_srgb1(max(luma709(c), 0.0));
+            let threshold = u.p0.x;
+            let cutoff = u.p0.y;
+            var k = 0.0;
+            if l <= cutoff {
+                k = 0.0;
+            } else if l >= max(threshold, cutoff + 1e-3) {
+                k = 1.0;
+            } else {
+                k = (l - cutoff) / max(threshold - cutoff, 1e-3);
+            }
+            return o * k;
+        }
+        case OP_FOUR_COLOR_GRADIENT: {
+            let c1 = vec3<f32>(u.p0.x, u.p0.y, u.p0.z);
+            let c2 = vec3<f32>(u.p0.w, u.p1.x, u.p1.y);
+            let c3 = vec3<f32>(u.p1.z, u.p1.w, u.p2.x);
+            let c4 = vec3<f32>(u.p2.y, u.p2.z, u.p2.w);
+            let expn = u.p3.y;
+            let a = max(length(pc - vec2<f32>(f32(s.x) * 0.25, f32(s.y) * 0.25)), 1.0);
+            let b = max(length(pc - vec2<f32>(f32(s.x) * 0.75, f32(s.y) * 0.25)), 1.0);
+            let c = max(length(pc - vec2<f32>(f32(s.x) * 0.25, f32(s.y) * 0.75)), 1.0);
+            let d = max(length(pc - vec2<f32>(f32(s.x) * 0.75, f32(s.y) * 0.75)), 1.0);
+            let wa = 1.0 / powf(a, expn);
+            let wb = 1.0 / powf(b, expn);
+            let wc = 1.0 / powf(c, expn);
+            let wd = 1.0 / powf(d, expn);
+            let rgb = dec((c1 * wa + c2 * wb + c3 * wc + c4 * wd) / (wa + wb + wc + wd));
+            let op = u.p3.x;
+            let o = ld(p);
+            return vec4<f32>(rgb * op + o.rgb * (1.0 - op), op + o.a * (1.0 - op));
+        }
+        case OP_RAMP: {
+            let start = u.p0.xy;
+            let end = u.p0.zw;
+            let sc = u.p1.xyz;
+            let ec = vec3<f32>(u.p1.w, u.p2.x, u.p2.y);
+            let blend = u.p2.z;
+            let v = end - start;
+            let len2 = max(dot(v, v), 1e-9);
+            var t = 0.0;
+            if u.i1.x == 1u {
+                t = length(pc - start) / sqrt(len2);
+            } else {
+                t = dot(pc - start, v) / len2;
+            }
+            t = clamp(t, 0.0, 1.0);
+            let rgb = dec(sc + (ec - sc) * t);
+            let op = 1.0 - blend;
+            let o = ld(p);
+            return vec4<f32>(rgb * op + o.rgb * (1.0 - op), op + o.a * (1.0 - op));
+        }
+        case OP_CIRCLE: {
+            let center = u.p0.xy;
+            let radius = u.p0.z;
+            let col = dec(vec3<f32>(u.p0.w, u.p1.x, u.p1.y));
+            let op = u.p1.z;
+            let a = clamp(radius - length(pc - center) + 0.5, 0.0, 1.0) * op;
+            let o = ld(p);
+            if a <= 0.0 {
+                return o;
+            }
+            return vec4<f32>(col * a + o.rgb * (1.0 - a), a + o.a * (1.0 - a));
+        }
+        case OP_GRID: {
+            let size = max(u.p0.x, 1.0);
+            let border = u.p0.y;
+            let col = dec(vec3<f32>(u.p0.z, u.p0.w, u.p1.x));
+            let op = u.p1.y;
+            let ox = f32(s.x) / 2.0;
+            let oy = f32(s.y) / 2.0;
+            let rx = f32(p.x) - ox;
+            let ry = f32(p.y) - oy;
+            let mx = rx - floor(rx / size) * size;
+            let my = ry - floor(ry / size) * size;
+            let gx = min(mx, size - mx);
+            let gy = min(my, size - my);
+            let a = clamp(border * 0.5 - min(gx, gy) + 0.5, 0.0, 1.0) * op;
+            let o = ld(p);
+            if a <= 0.0 {
+                return o;
+            }
+            return vec4<f32>(col * a + o.rgb * (1.0 - a), a + o.a * (1.0 - a));
+        }
+        case OP_LENS_FLARE: {
+            let center = u.p0.xy;
+            let brightness = u.p0.z;
+            let blend = u.p0.w;
+            let scale = max(f32(max(s.x, s.y)), 1.0);
+            let d = length(pc - center) / scale;
+            var add = vec3<f32>(1.0, 0.9, 0.7) * (0.35 * exp(-d * 18.0) + 0.08 * exp(-d * 3.0));
+            let mx = f32(s.x) / 2.0;
+            let my = f32(s.y) / 2.0;
+            let g0 = center + (vec2<f32>(mx, my) - center) * (2.0 * 0.5);
+            let g1 = center + (vec2<f32>(mx, my) - center) * (2.0 * 1.3);
+            let g2 = center + (vec2<f32>(mx, my) - center) * (2.0 * 1.7);
+            let d0 = length(pc - g0) / scale;
+            let d1 = length(pc - g1) / scale;
+            let d2 = length(pc - g2) / scale;
+            let r0 = max(1.0 - abs((d0 - 0.05) / 0.01), 0.0) * 0.15 + select(0.0, 0.06, d0 < 0.05);
+            let r1 = max(1.0 - abs((d1 - 0.03) / 0.01), 0.0) * 0.15 + select(0.0, 0.06, d1 < 0.03);
+            let r2 = max(1.0 - abs((d2 - 0.08) / 0.01), 0.0) * 0.15 + select(0.0, 0.06, d2 < 0.08);
+            add += vec3<f32>(0.4, 0.6, 1.0) * r0;
+            add += vec3<f32>(1.0, 0.5, 0.3) * r1;
+            add += vec3<f32>(0.4, 1.0, 0.5) * r2;
+            let o = ld(p);
+            return vec4<f32>(o.rgb + add * brightness * (1.0 - blend) * max(o.a, 0.0), o.a);
         }
         case OP_UNSHARP: {
             // src: the blurred image, aux: the original. Each colour channel on its own, as
