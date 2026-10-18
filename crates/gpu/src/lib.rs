@@ -80,7 +80,10 @@ pub struct GpuCompositor {
     accum: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32))>,
     /// Copy of the accumulator under a blend-mode layer (allocated on first use).
     backdrop: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32))>,
-    output: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32))>,
+    /// Independent final textures for concurrently visible monitors (0 = Program, 1 = Source).
+    outputs: HashMap<u64, (wgpu::Texture, wgpu::TextureView, (u32, u32))>,
+    /// Destination slot used by the next top-level composite. Nested transition layers share it.
+    output_slot: u64,
     accum_readback_buf: Option<(wgpu::Buffer, u64)>,
     uploads: HashMap<(usize, u32, u32), Uploaded>,
     clock: u64,
@@ -422,7 +425,8 @@ impl GpuCompositor {
             final_bgl,
             accum: None,
             backdrop: None,
-            output: None,
+            outputs: HashMap::new(),
+            output_slot: 0,
             accum_readback_buf: None,
             uploads: HashMap::new(),
             clock: 0,
@@ -434,6 +438,25 @@ impl GpuCompositor {
             cpu_transitions: 0,
             uploaded_bytes: 0,
         }
+    }
+
+    fn output_target(&mut self, w: u32, h: u32) -> wgpu::TextureView {
+        if let Some((_, view, _)) = self.outputs.get(&self.output_slot).filter(|(_, _, size)| *size == (w, h)) {
+            return view.clone();
+        }
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("filmcraft-monitor-output"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: OUTPUT_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        self.outputs.insert(self.output_slot, (texture, view.clone(), (w, h)));
+        view
     }
 
     fn target(
@@ -711,8 +734,22 @@ impl GpuCompositor {
     }
 
     /// [`composite`](Self::composite) with texel conversions already done by [`prepare`] (the
-    /// result is identical; only the upload work on this thread differs).
+    /// result is identical; only the upload work on this thread differs). Uses the default output
+    /// slot, retained for tests, exports, and single-output callers.
     pub fn composite_prepared(&mut self, plan: &FramePlan, prep: Option<&PreparedPlan>) -> (wgpu::TextureView, (u32, u32)) {
+        self.output_slot = 0;
+        self.render_plan(plan, prep, true, true)
+    }
+
+    /// Composite to an independent output for a specific UI monitor slot. This prevents two
+    /// monitors from overwriting the same native texture between layout and GPU presentation.
+    pub fn composite_prepared_for_slot(
+        &mut self,
+        plan: &FramePlan,
+        prep: Option<&PreparedPlan>,
+        slot: u64,
+    ) -> (wgpu::TextureView, (u32, u32)) {
+        self.output_slot = slot;
         self.render_plan(plan, prep, true, true)
     }
 
@@ -744,7 +781,7 @@ impl GpuCompositor {
         } else {
             None
         };
-        let out_view = Self::target(&self.device, &mut self.output, w, h, OUTPUT_FORMAT, wgpu::TextureUsages::COPY_SRC);
+        let out_view = if resolve { self.output_target(w, h) } else { self.dummy.clone() };
         // Layers whose effects the GPU stage can't run (no stage on this device, or a working image
         // larger than a texture) are rendered on the CPU here and drawn as plain RGBA layers.
         let max_side = self.device.limits().max_texture_dimension_2d;
@@ -941,7 +978,7 @@ impl GpuCompositor {
         if steps.iter().any(|s| matches!(s, PlanStep::Transition { effect, .. } if effect.effect != "push")) {
             self.cpu_transitions += 1;
             let plan = FramePlan::Composite { width, height, steps: steps.to_vec() };
-            return self.composite_prepared(&FramePlan::Image(filmcraft_render::plan::execute_cpu(&plan)), None);
+            return self.render_plan(&FramePlan::Image(filmcraft_render::plan::execute_cpu(&plan)), None, true, true);
         }
         let empty = FramePlan::Layers { width, height, layers: Vec::new() };
         let (canvas, dims) = self.render_plan(&empty, None, true, false);
@@ -1120,7 +1157,7 @@ impl GpuCompositor {
 
     /// Read the output back as RGBA8 (tests / screenshots / thumbnails).
     pub fn read_output(&self) -> Option<(u32, u32, Vec<u8>)> {
-        let (tex, _, (w, h)) = self.output.as_ref()?;
+        let (tex, _, (w, h)) = self.outputs.get(&0)?;
         let row = (w * 4).div_ceil(256) * 256;
         let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("readback"),
