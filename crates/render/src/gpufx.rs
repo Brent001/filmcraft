@@ -94,6 +94,10 @@ pub enum FxOp {
     Posterize {
         n: f32,
     },
+    /// Exact 3×3 median. Larger radii intentionally remain on the CPU to preserve behaviour.
+    Median {
+        radius: u32,
+    },
     /// Pixelate blocks, with horizontal and vertical block counts.
     Mosaic {
         bx: u32,
@@ -329,6 +333,7 @@ pub const GPU_EFFECTS: &[&str] = &[
     "extract",
     "invert",
     "posterize",
+    "median",
     "mosaic",
     "find_edges",
     "emboss",
@@ -468,6 +473,13 @@ impl FxOp {
             }
             "invert" => FxOp::Invert { channel: choice(e, "channel"), blend: f(e, "blend", cx) / 100.0 },
             "posterize" => FxOp::Posterize { n: f(e, "levels", cx).max(2.0) - 1.0 },
+            "median" => {
+                let scale = if cx.px_scale.is_finite() { cx.px_scale.max(0.0) } else { 1.0 };
+                let radius = f(e, "radius", cx) * scale;
+                let cap = (100.0 * scale).min(w.max(h).max(1) as f32);
+                let radius = if radius.is_finite() && radius > 0.0 { radius.round().clamp(0.0, cap) as u32 } else { 0 };
+                FxOp::Median { radius }
+            }
             "mosaic" => FxOp::Mosaic {
                 bx: f(e, "horizontal", cx).max(1.0) as u32,
                 by: f(e, "vertical", cx).max(1.0) as u32,
@@ -901,6 +913,7 @@ impl FxOp {
             FxOp::Extract { lo, hi, soft, .. } => fin(&[*lo, *hi, *soft]),
             FxOp::Invert { blend, .. } => blend.is_finite(),
             FxOp::Posterize { n } => n.is_finite(),
+            FxOp::Median { radius } => *radius <= 1,
             FxOp::Mosaic { .. } | FxOp::Replicate { .. } => true,
             FxOp::FindEdges { blend, .. } => blend.is_finite(),
             FxOp::Emboss { dx, dy, contrast, blend } => fin(&[*dx, *dy, *contrast, *blend]),
@@ -1094,6 +1107,7 @@ impl FxOp {
                 let n = *n;
                 img.map_rgb(|c, _, _| dec(enc(c).map(|v| (v * n).round() / n)));
             }
+            FxOp::Median { radius } => crate::effects::median(img, *radius as isize),
             FxOp::Mosaic { bx, by } => crate::effects::mosaic(img, (*bx).max(1) as usize, (*by).max(1) as usize),
             FxOp::FindEdges { invert, blend } => {
                 let (invert, blend) = (*invert, *blend);
