@@ -384,7 +384,7 @@ mod tests {
             }
         }
         // a discrete Intel GPU of an affected id would not be an integrated one
-        let discrete: Vec<Candidate> = uhd_630().into_iter().map(|c| if c.vendor == INTEL { Candidate { device_type: DiscreteGpu, ..c } else { c }).collect();
+        let discrete: Vec<Candidate> = uhd_630().into_iter().map(|c| if c.vendor == INTEL { Candidate { device_type: DiscreteGpu, ..c } } else { c }).collect();
         assert_eq!(choose(&discrete, HighPerformance), Some(0));
     }
 
