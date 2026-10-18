@@ -67,6 +67,7 @@ const OP_LENS_DISTORTION: u32 = 45u;
 const OP_BASIC_3D: u32 = 46u;
 const OP_BEVEL_ALPHA: u32 = 47u;
 const OP_NOISE: u32 = 48u;
+const OP_KEY: u32 = 49u;
 
 fn size() -> vec2<i32> {
     return vec2<i32>(i32(u.i0.y), i32(u.i0.z));
@@ -746,6 +747,39 @@ fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
             }
             let out_rgb = dec(rgb);
             return vec4<f32>(out_rgb * o.a, o.a);
+        }
+        case OP_KEY: {
+            let o = ld(p);
+            if o.a <= 0.0 {
+                return o;
+            }
+            let c = enc(o.rgb / o.a);
+            let y = 0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z;
+            let cb = (c.z - y) / (2.0 * (1.0 - 0.0722));
+            let cr = (c.x - y) / (2.0 * (1.0 - 0.2126));
+            let delta = vec3<f32>(y, cb, cr) - u.p0.xyz;
+            let d = sqrt(delta.y * delta.y + delta.z * delta.z) + abs(delta.x) * 0.15;
+            let alpha = clamp((d - u.p0.w) / u.p1.x, 0.0, 1.0);
+            var out_rgb = c;
+            let spill = u.p1.y;
+            let dom = u.i1.x;
+            if spill > 0.0 {
+                if dom == 0u {
+                    let others = (out_rgb.y + out_rgb.z) / 2.0;
+                    if out_rgb.x > others { out_rgb.x -= (out_rgb.x - others) * spill; }
+                } else if dom == 1u {
+                    let others = (out_rgb.x + out_rgb.z) / 2.0;
+                    if out_rgb.y > others { out_rgb.y -= (out_rgb.y - others) * spill; }
+                } else {
+                    let others = (out_rgb.x + out_rgb.y) / 2.0;
+                    if out_rgb.z > others { out_rgb.z -= (out_rgb.z - others) * spill; }
+                }
+            }
+            if u.i1.y == 1u {
+                return vec4<f32>(vec3<f32>(alpha * o.a), o.a);
+            }
+            let a = o.a * alpha;
+            return vec4<f32>(dec(out_rgb) * a, a);
         }
         case OP_FOUR_COLOR_GRADIENT: {
             let c1 = vec3<f32>(u.p0.x, u.p0.y, u.p0.z);
