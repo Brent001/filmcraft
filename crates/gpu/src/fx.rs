@@ -113,6 +113,8 @@ struct Step {
     combine: bool,
     /// This pass belongs to an operation that must preserve its pre-effect source texture.
     preserve_original: bool,
+    /// Release the preserved texture after this final pass (for source-only effects).
+    release_original_after: bool,
 }
 
 fn step(code: u32, i1: [u32; 4], p: &[f32]) -> Step {
@@ -120,7 +122,7 @@ fn step(code: u32, i1: [u32; 4], p: &[f32]) -> Step {
     for (d, s) in q.iter_mut().zip(p) {
         *d = *s;
     }
-    Step { run: false, code, i1, p: q, combine: false, preserve_original: false }
+    Step { run: false, code, i1, p: q, combine: false, preserve_original: false, release_original_after: false }
 }
 
 /// Box passes along x (vertical = false) or y for the radii (radius 0 is a no-op on the CPU).
@@ -205,6 +207,8 @@ fn steps(op: &FxOp) -> Vec<Step> {
                 let mut combine = step(OP_SHADOW_COMBINE, [0; 4], &[]);
                 combine.combine = true;
                 out.push(combine);
+            } else if let Some(last) = out.last_mut() {
+                last.release_original_after = true;
             }
         }
         FxOp::Noise { amount, colored, clip, seed } => {
@@ -521,7 +525,7 @@ impl FxStage {
             };
             dispatches.push(Dispatch { run: s.run, bg, groups });
             cur = dst;
-            if s.combine {
+            if s.combine || s.release_original_after {
                 orig = None;
             }
         }
