@@ -44,4 +44,4 @@ jobs:
         run: cargo check --locked -p filmcraft
 
       - name: Run GPU effect and CPU-parity tests
-        run: cargo test --locked -p filmcraft-gpu --lib
+        run: cargo test --locked -p filmcraft-gpu --lib -- --test-threads=1
