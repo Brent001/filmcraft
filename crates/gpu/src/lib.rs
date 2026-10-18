@@ -811,12 +811,26 @@ impl GpuCompositor {
         // (bind group, None for a fixed-function layer or Some(region of the accumulator to copy
         // into the backdrop) for a layer that reads the destination; Some(None): off the output)
         let mut bind_groups = Vec::with_capacity(layers.len());
+        // Allocate one aligned uniform arena for all final layer draws. A single upload avoids
+        // a buffer allocation and queue.write_buffer call for every clip in a multilayer timeline.
+        const LAYER_UNIFORM_BYTES: usize = UNIFORM_FLOATS * std::mem::size_of::<f32>();
+        let uniform_alignment = self.device.limits().min_uniform_buffer_offset_alignment.max(1) as usize;
+        let uniform_stride = LAYER_UNIFORM_BYTES.div_ceil(uniform_alignment) * uniform_alignment;
+        let uniform_slots = layers.len().max(1);
+        let uniform_size = uniform_stride * uniform_slots;
+        let mut layer_uniform_data = vec![0u8; uniform_size];
+        let layer_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("filmcraft-layer-uniforms"),
+            size: uniform_size as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         // the effect stage of each layer with effects (recorded right before its draw)
         let mut jobs: Vec<Option<fx::FxJob>> = Vec::with_capacity(layers.len());
         if let Some(f) = self.fx.as_mut() {
             f.begin_frame();
         }
-        for (l, k) in layers.iter().zip(&keys) {
+        for (layer_index, (l, k)) in layers.iter().zip(&keys).enumerate() {
             // (every frame was just uploaded; a missing upload draws transparent texels)
             let src = self.src_info(&l.frame, *k).unwrap_or(SrcInfo {
                 kind: 1,
@@ -880,9 +894,18 @@ impl GpuCompositor {
                 }
             };
             jobs.push(job);
-            let buf = self.uniform_buffer(&u);
+            let offset = layer_index * uniform_stride;
+            for (index, value) in u.iter().enumerate() {
+                let byte = offset + index * std::mem::size_of::<f32>();
+                layer_uniform_data[byte..byte + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            let uniform_binding = wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: &layer_uniform_buffer,
+                offset: offset as u64,
+                size: std::num::NonZeroU64::new(LAYER_UNIFORM_BYTES as u64),
+            });
             let mut entries = vec![
-                wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 0, resource: uniform_binding },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&tex[0]) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&tex[1]) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&tex[2]) },
@@ -898,6 +921,7 @@ impl GpuCompositor {
             let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("layer"), layout, entries: &entries });
             bind_groups.push((bg, region));
         }
+        self.queue.write_buffer(&layer_uniform_buffer, 0, &layer_uniform_data);
         if let Some(f) = self.fx.as_mut() {
             f.end_frame();
         }
