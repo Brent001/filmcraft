@@ -130,6 +130,14 @@ pub enum FxOp {
         clip: bool,
         seed: u64,
     },
+    Key {
+        key_ycbcr: [f32; 3],
+        tolerance: f32,
+        softness: f32,
+        spill: f32,
+        dominant: u32,
+        output: u32,
+    },
     FourColorGradient {
         colors: [[f32; 3]; 4],
         opacity: f32,
@@ -318,6 +326,8 @@ pub const GPU_EFFECTS: &[&str] = &[
     "replicate",
     "strobe",
     "noise",
+    "color_key",
+    "ultra_key",
     "luma_key",
     "four_color_gradient",
     "ramp",
@@ -481,6 +491,23 @@ impl FxOp {
                 clip: b(e, "clip"),
                 seed: crate::effects::noise_frame_seed(cx),
             },
+            "color_key" | "ultra_key" => {
+                let ultra = e.effect == "ultra_key";
+                let kc = if ultra { color(e, "key_color", cx) } else { color(e, "color", cx) };
+                let key_ycbcr = filmcraft_color::rgb_to_ycbcr(kc[0], kc[1], kc[2], filmcraft_color::Matrix::Bt709);
+                let (tolerance, softness, spill, output) = if ultra {
+                    (
+                        0.05 + f(e, "tolerance", cx) / 100.0 * 0.25 + f(e, "transparency", cx) / 100.0 * 0.05,
+                        0.05 + f(e, "soften", cx) / 100.0 * 0.2 + f(e, "pedestal", cx) / 100.0 * 0.05,
+                        f(e, "spill", cx) / 100.0,
+                        choice(e, "output"),
+                    )
+                } else {
+                    (f(e, "tolerance", cx) / 255.0 * 0.6 + 0.01, f(e, "feather", cx) / 50.0 * 0.2 + 0.01, 0.0, 0)
+                };
+                let dominant = if kc[1] >= kc[0] && kc[1] >= kc[2] { 1 } else if kc[2] >= kc[0] { 2 } else { 0 };
+                FxOp::Key { key_ycbcr, tolerance, softness, spill, dominant, output }
+            }
             "four_color_gradient" => {
                 let cols = [color(e, "c1", cx), color(e, "c2", cx), color(e, "c3", cx), color(e, "c4", cx)];
                 FxOp::FourColorGradient {
@@ -853,6 +880,8 @@ impl FxOp {
             FxOp::Strobe { color, blend, .. } => fin(color) && blend.is_finite(),
             FxOp::LumaKey { threshold, cutoff } => fin(&[*threshold, *cutoff]),
             FxOp::Noise { amount, .. } => amount.is_finite(),
+            FxOp::Key { key_ycbcr, tolerance, softness, spill, dominant, output } =>
+                fin(key_ycbcr) && fin(&[*tolerance, *softness, *spill]) && *dominant <= 2 && *output <= 2,
             FxOp::FourColorGradient { colors, opacity, blend_exp } => colors.iter().all(|c| fin(c)) && fin(&[*opacity, *blend_exp]),
             FxOp::Ramp { start, end, start_color, end_color, blend, .. } =>
                 fin(start) && fin(end) && fin(start_color) && fin(end_color) && blend.is_finite(),
@@ -1148,6 +1177,32 @@ impl FxOp {
                         p[0] = out[0] * a;
                         p[1] = out[1] * a;
                         p[2] = out[2] * a;
+                    }
+                });
+            }
+            FxOp::Key { key_ycbcr, tolerance, softness, spill, dominant, output } => {
+                let (kycc, tol, soft, spill, dom, output) = (*key_ycbcr, *tolerance, *softness, *spill, *dominant as usize, *output);
+                img.px.par_chunks_mut(4).for_each(|p| {
+                    if p[3] <= 0.0 {
+                        return;
+                    }
+                    let c = enc([p[0] / p[3], p[1] / p[3], p[2] / p[3]]);
+                    let ycc = filmcraft_color::rgb_to_ycbcr(c[0], c[1], c[2], filmcraft_color::Matrix::Bt709);
+                    let d = ((ycc[1] - kycc[1]).powi(2) + (ycc[2] - kycc[2]).powi(2)).sqrt() + (ycc[0] - kycc[0]).abs() * 0.15;
+                    let alpha = ((d - tol) / soft).clamp(0.0, 1.0);
+                    let mut color = c;
+                    if spill > 0.0 {
+                        let others = (color[(dom + 1) % 3] + color[(dom + 2) % 3]) / 2.0;
+                        if color[dom] > others {
+                            color[dom] -= (color[dom] - others) * spill;
+                        }
+                    }
+                    if output == 1 {
+                        p.copy_from_slice(&[alpha * p[3], alpha * p[3], alpha * p[3], p[3]]);
+                    } else {
+                        let a = p[3] * alpha;
+                        let lo = dec(color);
+                        p.copy_from_slice(&[lo[0] * a, lo[1] * a, lo[2] * a, a]);
                     }
                 });
             }
