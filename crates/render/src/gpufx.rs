@@ -9,7 +9,7 @@
 //! op to the GPU when [`FxOp::gpu_ok`] says the shader covers it (finite numbers, no minifying
 //! resample), otherwise the clip is rendered on the CPU as before.
 
-use filmcraft_color::{hsl_to_rgb, linear_to_srgb, luma709, rgb_to_hsl};
+use filmcraft_color::{hsl_to_rgb, linear_to_srgb, luma709, rgb_to_hsl, srgb_to_linear};
 use filmcraft_geom::Affine;
 use filmcraft_project::EffectInstance;
 use rayon::prelude::*;
@@ -93,6 +93,27 @@ pub enum FxOp {
     },
     Posterize {
         n: f32,
+    },
+    /// Pixelate blocks, with horizontal and vertical block counts.
+    Mosaic {
+        bx: u32,
+        by: u32,
+    },
+    /// Sobel edge detector, blended over the source in premultiplied space.
+    FindEdges {
+        invert: bool,
+        blend: f32,
+    },
+    /// Directional embossed-lighting pass.
+    Emboss {
+        dx: f32,
+        dy: f32,
+        contrast: f32,
+        blend: f32,
+    },
+    /// Repeat the source pattern in both dimensions.
+    Replicate {
+        n: u32,
     },
     /// Three box passes per axis approximating a Gaussian (radii per pass; empty: axis untouched).
     Gaussian {
@@ -214,6 +235,10 @@ pub const GPU_EFFECTS: &[&str] = &[
     "extract",
     "invert",
     "posterize",
+    "mosaic",
+    "find_edges",
+    "emboss",
+    "replicate",
     "gaussian_blur",
     "gaussian_blur_legacy",
     "camera_blur",
@@ -333,6 +358,22 @@ impl FxOp {
             }
             "invert" => FxOp::Invert { channel: choice(e, "channel"), blend: f(e, "blend", cx) / 100.0 },
             "posterize" => FxOp::Posterize { n: f(e, "levels", cx).max(2.0) - 1.0 },
+            "mosaic" => FxOp::Mosaic {
+                bx: f(e, "horizontal", cx).max(1.0) as u32,
+                by: f(e, "vertical", cx).max(1.0) as u32,
+            },
+            "find_edges" => FxOp::FindEdges { invert: b(e, "invert"), blend: f(e, "blend", cx) / 100.0 },
+            "emboss" => {
+                let dir = (f(e, "direction", cx) as f64).to_radians();
+                let relief = f(e, "relief", cx) * cx.px_scale.max(0.25);
+                FxOp::Emboss {
+                    dx: (dir.cos() as f32) * relief,
+                    dy: (-dir.sin() as f32) * relief,
+                    contrast: f(e, "contrast", cx) / 100.0,
+                    blend: f(e, "blend", cx) / 100.0,
+                }
+            }
+            "replicate" => FxOp::Replicate { n: f(e, "count", cx).clamp(1.0, 16.0) as u32 },
             "gaussian_blur" | "gaussian_blur_legacy" => {
                 let r = f(e, "blurriness", cx) * cx.px_scale * 0.5;
                 let dims = choice(e, "dimensions");
@@ -603,6 +644,9 @@ impl FxOp {
             FxOp::Extract { lo, hi, soft, .. } => fin(&[*lo, *hi, *soft]),
             FxOp::Invert { blend, .. } => blend.is_finite(),
             FxOp::Posterize { n } => n.is_finite(),
+            FxOp::Mosaic { .. } | FxOp::Replicate { .. } => true,
+            FxOp::FindEdges { blend, .. } => blend.is_finite(),
+            FxOp::Emboss { dx, dy, contrast, blend } => fin(&[*dx, *dy, *contrast, *blend]),
             FxOp::Gaussian { .. } => true,
             FxOp::DirectionalBlur { dx, dy, .. } => fin(&[*dx, *dy]),
             FxOp::Unsharp { amount, threshold, .. } => fin(&[*amount, *threshold]),
@@ -775,6 +819,62 @@ impl FxOp {
             FxOp::Posterize { n } => {
                 let n = *n;
                 img.map_rgb(|c, _, _| dec(enc(c).map(|v| (v * n).round() / n)));
+            }
+            FxOp::Mosaic { bx, by } => crate::effects::mosaic(img, (*bx).max(1) as usize, (*by).max(1) as usize),
+            FxOp::FindEdges { invert, blend } => {
+                let (invert, blend) = (*invert, *blend);
+                let src = img.clone();
+                let w = img.w;
+                img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+                    for x in 0..w {
+                        let l = |dx: isize, dy: isize| {
+                            let p = src.get_clamped(x as isize + dx, y as isize + dy);
+                            luma709(p[0], p[1], p[2])
+                        };
+                        let gx = l(1, -1) + 2.0 * l(1, 0) + l(1, 1) - l(-1, -1) - 2.0 * l(-1, 0) - l(-1, 1);
+                        let gy = l(-1, 1) + 2.0 * l(0, 1) + l(1, 1) - l(-1, -1) - 2.0 * l(0, -1) - l(1, -1);
+                        let mut m = (gx * gx + gy * gy).sqrt().min(1.0);
+                        if !invert {
+                            m = 1.0 - m;
+                        }
+                        let p = src.get(x, y);
+                        let a = p[3];
+                        for k in 0..3 {
+                            row[x * 4 + k] = m * a * (1.0 - blend) + p[k] * blend;
+                        }
+                    }
+                });
+            }
+            FxOp::Emboss { dx, dy, contrast, blend } => {
+                let (dx, dy, contrast, blend) = (*dx, *dy, *contrast, *blend);
+                let src = img.clone();
+                let w = img.w;
+                img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+                    for x in 0..w {
+                        let a = src.sample_bilinear_clamped(x as f32 + 0.5 + dx, y as f32 + 0.5 + dy);
+                        let b = src.sample_bilinear_clamped(x as f32 + 0.5 - dx, y as f32 + 0.5 - dy);
+                        let v = srgb_to_linear((0.5 + (luma709(a[0], a[1], a[2]) - luma709(b[0], b[1], b[2])) * contrast * 2.0).clamp(0.0, 1.0));
+                        let p = src.get(x, y);
+                        for k in 0..3 {
+                            row[x * 4 + k] = v * p[3] * (1.0 - blend) + p[k] * blend;
+                        }
+                    }
+                });
+            }
+            FxOp::Replicate { n } => {
+                let n = (*n as usize).clamp(1, 16);
+                let src = img.clone();
+                let (w, h) = (img.w, img.h);
+                img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+                    for x in 0..w {
+                        let u = (x * n) % w;
+                        let v = (y * n) % h;
+                        let sx = u as f32 + 0.5 + (n as f32 - 1.0) * 0.5 / n as f32;
+                        let sy = v as f32 + 0.5;
+                        let p = src.sample_bilinear_clamped(sx, sy);
+                        row[x * 4..x * 4 + 4].copy_from_slice(&p);
+                    }
+                });
             }
             FxOp::Gaussian { rx, ry, repeat } => crate::effects::box_blur(img, rx, ry, *repeat),
             FxOp::DirectionalBlur { dx, dy, steps } => crate::effects::directional_taps(img, *dx, *dy, *steps as usize),
