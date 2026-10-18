@@ -1,0 +1,47 @@
+name: GPU effect regression
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "crates/gpu/**"
+      - "crates/render/**"
+      - "crates/project/src/effect.rs"
+      - "crates/ui-egui/src/lib.rs"
+      - "apps/filmcraft/src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/gpu-effects.yml"
+  pull_request:
+    paths:
+      - "crates/gpu/**"
+      - "crates/render/**"
+      - "crates/project/src/effect.rs"
+      - "crates/ui-egui/src/lib.rs"
+      - "apps/filmcraft/src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/gpu-effects.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-gpu-effects:
+    name: Windows compile and GPU effect parity
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Compile desktop app
+        run: cargo check --locked -p filmcraft
+
+      - name: Run GPU effect and CPU-parity tests
+        run: cargo test --locked -p filmcraft-gpu --lib
