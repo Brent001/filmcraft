@@ -153,6 +153,8 @@ fn cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>, bool)> {
         ("replicate", vec![("count", fl(16.0))], false),
         ("strobe", vec![("period", fl(1.0)), ("duration", fl(0.5)), ("blend", fl(25.0)), ("color", col(0.9, 0.2, 0.1))], false),
         ("strobe", vec![("period", fl(1.0)), ("duration", fl(0.0))], false),
+        ("noise", vec![("amount", fl(35.0)), ("color", ParamValue::Bool(true)), ("clip", ParamValue::Bool(true))], false),
+        ("noise", vec![("amount", fl(50.0)), ("color", ParamValue::Bool(false)), ("clip", ParamValue::Bool(false))], false),
         ("luma_key", vec![("threshold", fl(70.0)), ("cutoff", fl(20.0))], true),
         ("four_color_gradient", vec![("c1", col(1.0, 0.0, 0.0)), ("c2", col(0.0, 1.0, 0.0)), ("c3", col(0.0, 0.0, 1.0)), ("c4", col(1.0, 1.0, 0.0)), ("opacity", fl(45.0)), ("blend", fl(80.0))], false),
         ("ramp", vec![("start", pt(5.0, 7.0)), ("end", pt(55.0, 31.0)), ("start_color", col(0.1, 0.2, 0.9)), ("end_color", col(0.9, 0.8, 0.1)), ("blend", fl(15.0))], false),
