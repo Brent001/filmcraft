@@ -68,6 +68,8 @@ const OP_BASIC_3D: u32 = 46u;
 const OP_BEVEL_ALPHA: u32 = 47u;
 const OP_NOISE: u32 = 48u;
 const OP_KEY: u32 = 49u;
+const OP_SHADOW_SEED: u32 = 50u;
+const OP_SHADOW_COMBINE: u32 = 51u;
 
 fn size() -> vec2<i32> {
     return vec2<i32>(i32(u.i0.y), i32(u.i0.z));
@@ -953,6 +955,21 @@ fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
             let o = ld(p);
             let shade = -(gx * lx + gy * ly) * intensity;
             return vec4<f32>(clamp(o.rgb + vec3<f32>(shade * o.a), vec3<f32>(0.0), vec3<f32>(o.a)), o.a);
+        }
+        case OP_SHADOW_SEED: {
+            let dx = u.p0.x;
+            let dy = u.p0.y;
+            let color = dec(vec3<f32>(u.p0.z, u.p0.w, u.p1.x));
+            let opacity = u.p1.y;
+            let source_alpha = sample_bilinear(pc.x - dx, pc.y - dy).a;
+            let a = source_alpha * opacity;
+            return vec4<f32>(color * a, a);
+        }
+        case OP_SHADOW_COMBINE: {
+            let shadow = ld(p);
+            let original = textureLoad(aux, p, 0);
+            // The CPU reference places the original over the shadow using Normal compositing.
+            return original + shadow * (1.0 - original.a);
         }
         case OP_UNSHARP: {
             // src: the blurred image, aux: the original. Each colour channel on its own, as
