@@ -460,6 +460,13 @@ fn gpu_effect_chains_match_cpu() {
             effect("invert", &[("channel", ParamValue::Choice(4))]),
             effect("directional_blur", &[("length", fl(6.0)), ("direction", fl(90.0))]),
         ],
+        // Shadow Only must release the preserved-original texture before the next effect begins.
+        vec![
+            effect("drop_shadow", &[("only", ParamValue::Bool(true)), ("distance", fl(5.0)), ("softness", fl(3.0))]),
+            effect("brightness_contrast", &[("brightness", fl(20.0)), ("contrast", fl(30.0))]),
+            effect("drop_shadow", &[("only", ParamValue::Bool(false)), ("distance", fl(2.0)), ("softness", fl(1.0))]),
+            effect("tint", &[("amount", fl(25.0))]),
+        ],
     ];
     for chain in chains {
         let ops: Vec<FxOp> = chain.iter().filter_map(|e| FxOp::eval(e, &cx(Tick::ZERO, 1.0), w as usize, h as usize)).collect();
