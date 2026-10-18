@@ -70,6 +70,7 @@ const OP_NOISE: u32 = 48u;
 const OP_KEY: u32 = 49u;
 const OP_SHADOW_SEED: u32 = 50u;
 const OP_SHADOW_COMBINE: u32 = 51u;
+const OP_MEDIAN: u32 = 52u;
 
 fn size() -> vec2<i32> {
     return vec2<i32>(i32(u.i0.y), i32(u.i0.z));
@@ -163,6 +164,37 @@ fn luma709(c: vec3<f32>) -> f32 {
 
 fn edge_luma(p: vec2<i32>) -> f32 {
     return luma709(ld_clamped(p).rgb);
+}
+
+// Exact 3x3 median per premultiplied RGBA channel. Larger radii stay on the CPU,
+// where the original implementation uses the same clamped neighbourhood and total ordering.
+fn median_channel(p: vec2<i32>, channel: u32) -> f32 {
+    var values: array<f32, 9>;
+    var k = 0u;
+    for (var dy = -1; dy <= 1; dy = dy + 1) {
+        for (var dx = -1; dx <= 1; dx = dx + 1) {
+            let c = ld_clamped(p + vec2<i32>(dx, dy));
+            var v = c.r;
+            if channel == 1u { v = c.g; }
+            if channel == 2u { v = c.b; }
+            if channel == 3u { v = c.a; }
+            values[k] = v;
+            k = k + 1u;
+        }
+    }
+    // Insertion sort of nine scalar samples, then select the middle value.
+    for (var i = 1u; i < 9u; i = i + 1u) {
+        let v = values[i];
+        var j = i;
+        loop {
+            if j == 0u { break; }
+            if values[j - 1u] <= v { break; }
+            values[j] = values[j - 1u];
+            j = j - 1u;
+        }
+        values[j] = v;
+    }
+    return values[4u];
 }
 
 // u64 is represented as (low32, high32), allowing the deterministic CPU noise hash to
@@ -668,6 +700,14 @@ fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
                 acc += sample_clamped(pc.x + dx * t, pc.y + dy * t);
             }
             return acc / f32(steps);
+        }
+        case OP_MEDIAN: {
+            return vec4<f32>(
+                median_channel(p, 0u),
+                median_channel(p, 1u),
+                median_channel(p, 2u),
+                median_channel(p, 3u)
+            );
         }
         case OP_MOSAIC: {
             let bx = max(f32(max(u.i1.x, 1u)), 1.0);
