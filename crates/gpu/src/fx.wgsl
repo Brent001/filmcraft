@@ -145,6 +145,10 @@ fn luma709(c: vec3<f32>) -> f32 {
     return 0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z;
 }
 
+fn edge_luma(p: vec2<i32>) -> f32 {
+    return luma709(ld_clamped(p).rgb);
+}
+
 // `f32::powf` for x >= 0 (WGSL leaves pow(0, y) undefined).
 fn powf(x: f32, y: f32) -> f32 {
     if x == 0.0 {
@@ -606,11 +610,10 @@ fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
             return sample_clamped(cx, cy);
         }
         case OP_FIND_EDGES: {
-            let lum = (q: vec2<i32>) -> f32 { return luma709(ld_clamped(q).rgb); };
-            let gx = lum(p + vec2<i32>(1, -1)) + 2.0 * lum(p + vec2<i32>(1, 0)) + lum(p + vec2<i32>(1, 1))
-                   - lum(p + vec2<i32>(-1, -1)) - 2.0 * lum(p + vec2<i32>(-1, 0)) - lum(p + vec2<i32>(-1, 1));
-            let gy = lum(p + vec2<i32>(-1, 1)) + 2.0 * lum(p + vec2<i32>(0, 1)) + lum(p + vec2<i32>(1, 1))
-                   - lum(p + vec2<i32>(-1, -1)) - 2.0 * lum(p + vec2<i32>(0, -1)) - lum(p + vec2<i32>(1, -1));
+            let gx = edge_luma(p + vec2<i32>(1, -1)) + 2.0 * edge_luma(p + vec2<i32>(1, 0)) + edge_luma(p + vec2<i32>(1, 1))
+                   - edge_luma(p + vec2<i32>(-1, -1)) - 2.0 * edge_luma(p + vec2<i32>(-1, 0)) - edge_luma(p + vec2<i32>(-1, 1));
+            let gy = edge_luma(p + vec2<i32>(-1, 1)) + 2.0 * edge_luma(p + vec2<i32>(0, 1)) + edge_luma(p + vec2<i32>(1, 1))
+                   - edge_luma(p + vec2<i32>(-1, -1)) - 2.0 * edge_luma(p + vec2<i32>(0, -1)) - edge_luma(p + vec2<i32>(1, -1));
             var m = min(sqrt(gx * gx + gy * gy), 1.0);
             if u.i1.x == 0u {
                 m = 1.0 - m;
