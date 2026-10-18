@@ -470,6 +470,13 @@ impl FilmcraftApp {
         match made {
             Ok(compositor) if !broken.load(std::sync::atomic::Ordering::Relaxed) => {
                 let max_texture = rs.device.limits().max_texture_dimension_2d;
+                let adapter_name = rs.adapter.get_info().name;
+                if compositor.effects_accelerated() {
+                    log::info!("GPU compositor and standard-effect compute pipeline enabled on {adapter_name}");
+                } else {
+                    log::warn!("GPU compositor enabled on {adapter_name}, but its compute effect stage is unavailable; effect layers still render on the CPU");
+                    self.ui.status = format!("GPU compositor active on {adapter_name}; GPU effect kernels unavailable, effects render on CPU");
+                }
                 self.gpu = Some(GpuState { render_state: rs, compositor, texture: None, last_key: None, size: (0, 0), last_ms: 0.0, broken, max_texture });
             }
             _ => log::error!("GPU compositor failed to initialise; compositing on the CPU"),
