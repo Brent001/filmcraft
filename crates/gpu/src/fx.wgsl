@@ -50,6 +50,10 @@ const OP_MIRROR: u32 = 28u;
 const OP_OFFSET: u32 = 29u;
 const OP_VIDEO_LIMITER: u32 = 30u;
 const OP_LUMETRI: u32 = 31u;
+const OP_MOSAIC: u32 = 32u;
+const OP_FIND_EDGES: u32 = 33u;
+const OP_EMBOSS: u32 = 34u;
+const OP_REPLICATE: u32 = 35u;
 
 fn size() -> vec2<i32> {
     return vec2<i32>(i32(u.i0.y), i32(u.i0.z));
@@ -66,6 +70,11 @@ fn ld_or_clear(p: vec2<i32>) -> vec4<f32> {
         return vec4(0.0);
     }
     return textureLoad(src, p, 0);
+}
+
+fn ld_clamped(p: vec2<i32>) -> vec4<f32> {
+    let s = size();
+    return textureLoad(src, clamp(p, vec2<i32>(0, 0), s - vec2<i32>(1, 1)), 0);
 }
 
 // `Image::sample_bilinear`: pixel centres at +0.5, transparent outside.
@@ -586,6 +595,48 @@ fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
                 acc += sample_clamped(pc.x + dx * t, pc.y + dy * t);
             }
             return acc / f32(steps);
+        }
+        case OP_MOSAIC: {
+            let bx = max(f32(max(u.i1.x, 1u)), 1.0);
+            let by = max(f32(max(u.i1.y, 1u)), 1.0);
+            let bw = max(f32(s.x) / bx, 1.0);
+            let bh = max(f32(s.y) / by, 1.0);
+            let cx = (floor(f32(p.x) / bw) + 0.5) * bw;
+            let cy = (floor(f32(p.y) / bh) + 0.5) * bh;
+            return sample_clamped(cx, cy);
+        }
+        case OP_FIND_EDGES: {
+            let lum = (q: vec2<i32>) -> f32 { return luma709(ld_clamped(q).rgb); };
+            let gx = lum(p + vec2<i32>(1, -1)) + 2.0 * lum(p + vec2<i32>(1, 0)) + lum(p + vec2<i32>(1, 1))
+                   - lum(p + vec2<i32>(-1, -1)) - 2.0 * lum(p + vec2<i32>(-1, 0)) - lum(p + vec2<i32>(-1, 1));
+            let gy = lum(p + vec2<i32>(-1, 1)) + 2.0 * lum(p + vec2<i32>(0, 1)) + lum(p + vec2<i32>(1, 1))
+                   - lum(p + vec2<i32>(-1, -1)) - 2.0 * lum(p + vec2<i32>(0, -1)) - lum(p + vec2<i32>(1, -1));
+            var m = min(sqrt(gx * gx + gy * gy), 1.0);
+            if u.i1.x == 0u {
+                m = 1.0 - m;
+            }
+            let o = ld(p);
+            let rgb = vec3<f32>(m * o.a * (1.0 - u.p0.x)) + o.rgb * u.p0.x;
+            return vec4<f32>(rgb, o.a);
+        }
+        case OP_EMBOSS: {
+            let dx = u.p0.x;
+            let dy = u.p0.y;
+            let contrast = u.p0.z;
+            let blend = u.p0.w;
+            let a = sample_clamped(pc.x + dx, pc.y + dy);
+            let bq = sample_clamped(pc.x - dx, pc.y - dy);
+            let v = srgb_to_linear1(clamp(0.5 + (luma709(a.rgb) - luma709(bq.rgb)) * contrast * 2.0, 0.0, 1.0));
+            let o = ld(p);
+            return vec4<f32>(vec3<f32>(v * o.a * (1.0 - blend)) + o.rgb * blend, o.a);
+        }
+        case OP_REPLICATE: {
+            let n = max(i32(u.i1.x), 1);
+            let ux = (p.x * n) % s.x;
+            let vy = (p.y * n) % s.y;
+            let sx = f32(ux) + 0.5 + (f32(n) - 1.0) * 0.5 / f32(n);
+            let sy = f32(vy) + 0.5;
+            return sample_clamped(sx, sy);
         }
         case OP_UNSHARP: {
             // src: the blurred image, aux: the original. Each colour channel on its own, as
