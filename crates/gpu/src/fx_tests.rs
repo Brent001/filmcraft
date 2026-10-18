@@ -143,6 +143,8 @@ fn cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>, bool)> {
         ("posterize", vec![("levels", fl(2.0))], true),
         ("posterize", vec![("levels", fl(7.0))], true),
         ("posterize", vec![("levels", fl(255.0))], true),
+        ("median", vec![("radius", fl(0.0))], false),
+        ("median", vec![("radius", fl(1.0))], false),
         ("mosaic", vec![("horizontal", fl(7.0)), ("vertical", fl(5.0))], false),
         ("mosaic", vec![("horizontal", fl(100.0)), ("vertical", fl(80.0))], false),
         ("find_edges", vec![("invert", ParamValue::Bool(false)), ("blend", fl(0.0))], true),
@@ -525,6 +527,7 @@ fn hostile_parameters_are_bounded() {
     let (w, h) = (40usize, 24usize);
     let nan = [
         effect("brightness_contrast", &[("brightness", fl(f64::NAN))]),
+        effect("median", &[("radius", fl(2.0))]),
         effect("gaussian_blur", &[("blurriness", fl(f64::INFINITY))]),
         effect("directional_blur", &[("length", fl(f64::NAN))]),
         effect("transform", &[("rotation", fl(f64::NAN))]),
