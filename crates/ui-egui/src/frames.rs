@@ -933,7 +933,7 @@ fn plan_source_job(job: &Job, item: ItemId, pool: &Arc<MediaPool>, services: &Ar
     (filmcraft_render::plan::FramePlan::Image(img), false)
 }
 
-fn plan_job(job: &Job, seq: ItemId, pool: &MediaPool, services: &Arc<dyn Services>, previews: &PreviewStore) -> (filmcraft_render::plan::FramePlan, bool) {
+fn plan_job(job: &Job, seq: ItemId, pool: &Arc<MediaPool>, services: &Arc<dyn Services>, previews: &PreviewStore) -> (filmcraft_render::plan::FramePlan, bool) {
     let opts = filmcraft_render::RenderOptions { scale: job.scale, captions: true, ..Default::default() };
     if let Some(frame) = preview_frame(job, seq, pool, previews)
         && let Some(q) = job.project.sequence(seq)
