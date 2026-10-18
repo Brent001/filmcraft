@@ -716,6 +716,18 @@ impl GpuCompositor {
         u
     }
 
+    fn uniform_buffer(&self, u: &[f32; UNIFORM_FLOATS]) -> wgpu::Buffer {
+        let bytes: Vec<u8> = u.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("layer-u"),
+            size: bytes.len() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&buf, 0, &bytes);
+        buf
+    }
+
     /// Composite a plan; returns the output view (sRGB, over black) and its size.
     pub fn composite(&mut self, plan: &FramePlan) -> (wgpu::TextureView, (u32, u32)) {
         self.composite_prepared(plan, None)
