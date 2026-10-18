@@ -716,18 +716,6 @@ impl GpuCompositor {
         u
     }
 
-    fn uniform_buffer(&self, u: &[f32; UNIFORM_FLOATS]) -> wgpu::Buffer {
-        let bytes: Vec<u8> = u.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("layer-u"),
-            size: bytes.len() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        self.queue.write_buffer(&buf, 0, &bytes);
-        buf
-    }
-
     /// Composite a plan; returns the output view (sRGB, over black) and its size.
     pub fn composite(&mut self, plan: &FramePlan) -> (wgpu::TextureView, (u32, u32)) {
         self.composite_prepared(plan, None)
@@ -816,7 +804,9 @@ impl GpuCompositor {
         const LAYER_UNIFORM_BYTES: usize = UNIFORM_FLOATS * std::mem::size_of::<f32>();
         let uniform_alignment = self.device.limits().min_uniform_buffer_offset_alignment.max(1) as usize;
         let uniform_stride = LAYER_UNIFORM_BYTES.div_ceil(uniform_alignment) * uniform_alignment;
-        let uniform_slots = layers.len().max(1);
+        // Every layer can need a source-draw uniform (effect working image) plus a final layer
+        // uniform. They share this arena so even effect-heavy timelines allocate/upload once.
+        let uniform_slots = layers.len().max(1) * 2;
         let uniform_size = uniform_stride * uniform_slots;
         let mut layer_uniform_data = vec![0u8; uniform_size];
         let layer_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -853,12 +843,21 @@ impl GpuCompositor {
                         Self::uniforms(&src, &filmcraft_geom::Affine::scale(1.0 / n, 1.0 / n), 1.0, Blend::Normal, (lfx.size.0.max(1), lfx.size.1.max(1)));
                     // Effect sources use the working pixel center, avoiding interpolated vertex coordinates.
                     su[26] = n as f32;
-                    let sbuf = self.uniform_buffer(&su);
+                    let source_offset = layer_index * 2 * uniform_stride;
+                    for (index, value) in su.iter().enumerate() {
+                        let byte = source_offset + index * std::mem::size_of::<f32>();
+                        layer_uniform_data[byte..byte + 4].copy_from_slice(&value.to_le_bytes());
+                    }
+                    let source_binding = wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &layer_uniform_buffer,
+                        offset: source_offset as u64,
+                        size: std::num::NonZeroU64::new(LAYER_UNIFORM_BYTES as u64),
+                    });
                     let sbg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("fx-source"),
                         layout: &self.layer_bgl,
                         entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: sbuf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 0, resource: source_binding },
                             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&views[0]) },
                             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&views[1]) },
                             wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&views[2]) },
@@ -894,7 +893,7 @@ impl GpuCompositor {
                 }
             };
             jobs.push(job);
-            let offset = layer_index * uniform_stride;
+            let offset = (layer_index * 2 + 1) * uniform_stride;
             for (index, value) in u.iter().enumerate() {
                 let byte = offset + index * std::mem::size_of::<f32>();
                 layer_uniform_data[byte..byte + 4].copy_from_slice(&value.to_le_bytes());
