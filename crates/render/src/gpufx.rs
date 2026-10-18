@@ -434,9 +434,7 @@ impl FxOp {
             }
             "luma_key" => FxOp::LumaKey { threshold: f(e, "threshold", cx) / 100.0, cutoff: f(e, "cutoff", cx) / 100.0 },
             "four_color_gradient" => {
-                use crate::vfx::fv;
                 let cols = [color(e, "c1", cx), color(e, "c2", cx), color(e, "c3", cx), color(e, "c4", cx)];
-                let _ = fv; // colour values use the keyframed effect accessor above
                 FxOp::FourColorGradient {
                     colors: cols.map(|c| [c[0], c[1], c[2]]),
                     opacity: f(e, "opacity", cx) / 100.0,
@@ -1050,11 +1048,11 @@ impl FxOp {
                 let (vx, vy) = (ex - sx, ey - sy);
                 let len2 = (vx * vx + vy * vy).max(1e-9);
                 crate::effects::fill_over(img, 1.0 - blend, |x, y| {
-                    let t = if radial {
-                        (((x - sx).powi(2) + (y - sy).powi(2)).sqrt() / len2.sqrt())
+                    let t = (if radial {
+                        ((x - sx).powi(2) + (y - sy).powi(2)).sqrt() / len2.sqrt()
                     } else {
                         ((x - sx) * vx + (y - sy) * vy) / len2
-                    }.clamp(0.0, 1.0);
+                    }).clamp(0.0, 1.0);
                     dec([sc[0] + (ec[0] - sc[0]) * t, sc[1] + (ec[1] - sc[1]) * t, sc[2] + (ec[2] - sc[2]) * t])
                 });
             }
