@@ -200,6 +200,15 @@ pub enum FxOp {
         ly: f32,
         intensity: f32,
     },
+    DropShadow {
+        dx: f32,
+        dy: f32,
+        color: [f32; 3],
+        opacity: f32,
+        only: bool,
+        rx: Vec<u32>,
+        ry: Vec<u32>,
+    },
     /// Three box passes per axis approximating a Gaussian (radii per pass; empty: axis untouched).
     Gaussian {
         rx: Vec<u32>,
@@ -339,6 +348,7 @@ pub const GPU_EFFECTS: &[&str] = &[
     "lens_distortion",
     "basic_3d",
     "bevel_alpha",
+    "drop_shadow",
     "gaussian_blur",
     "gaussian_blur_legacy",
     "camera_blur",
@@ -603,6 +613,23 @@ impl FxOp {
                 let th = f(e, "thickness", cx) * cx.px_scale;
                 let ang = (f(e, "angle", cx) as f64).to_radians();
                 FxOp::BevelAlpha { thickness: th, lx: ang.cos() as f32, ly: -(ang.sin() as f32), intensity: f(e, "intensity", cx) / 100.0 }
+            }
+            "drop_shadow" => {
+                let col = color(e, "color", cx);
+                let opacity = f(e, "opacity", cx) / 100.0;
+                let dir = (f(e, "direction", cx) as f64).to_radians();
+                let dist = f(e, "distance", cx) as f64 * cx.px_scale as f64;
+                let soft = f(e, "softness", cx) * cx.px_scale * 0.5;
+                let (rx, ry) = crate::effects::gaussian_boxes(w, h, soft, soft);
+                FxOp::DropShadow {
+                    dx: (dir.sin() * dist) as f32,
+                    dy: (-dir.cos() * dist) as f32,
+                    color: [col[0], col[1], col[2]],
+                    opacity,
+                    only: b(e, "only"),
+                    rx,
+                    ry,
+                }
             }
             "gaussian_blur" | "gaussian_blur_legacy" => {
                 let r = f(e, "blurriness", cx) * cx.px_scale * 0.5;
@@ -893,6 +920,7 @@ impl FxOp {
             FxOp::LensDistortion { curvature, cx, cy, norm } => fin(&[*curvature, *cx, *cy, *norm]) && *norm > 0.0,
             FxOp::Basic3D { swivel, tilt, distance } => fin(&[*swivel, *tilt, *distance]),
             FxOp::BevelAlpha { thickness, lx, ly, intensity } => fin(&[*thickness, *lx, *ly, *intensity]),
+            FxOp::DropShadow { dx, dy, color, opacity, .. } => fin(&[*dx, *dy, *opacity]) && fin(color),
             FxOp::Gaussian { .. } => true,
             FxOp::DirectionalBlur { dx, dy, .. } => fin(&[*dx, *dy]),
             FxOp::Unsharp { amount, threshold, .. } => fin(&[*amount, *threshold]),
@@ -1374,6 +1402,23 @@ impl FxOp {
                         }
                     }
                 });
+            }
+            FxOp::DropShadow { dx, dy, color, opacity, only, rx, ry } => {
+                let lc = dec(*color);
+                let matrix = filmcraft_geom::Affine::translate(*dx as f64, *dy as f64);
+                let mut sh = img.transformed(img.w, img.h, &matrix);
+                sh.px.par_chunks_mut(4).for_each(|p| {
+                    let a = p[3] * *opacity;
+                    p[0] = lc[0] * a;
+                    p[1] = lc[1] * a;
+                    p[2] = lc[2] * a;
+                    p[3] = a;
+                });
+                crate::effects::box_blur(&mut sh, rx, ry, false);
+                if !only {
+                    crate::blend::composite(&mut sh, img, 1.0, crate::blend::Blend::Normal);
+                }
+                *img = sh;
             }
             FxOp::Gaussian { rx, ry, repeat } => crate::effects::box_blur(img, rx, ry, *repeat),
             FxOp::DirectionalBlur { dx, dy, steps } => crate::effects::directional_taps(img, *dx, *dy, *steps as usize),
