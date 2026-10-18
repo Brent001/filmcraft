@@ -52,6 +52,10 @@ const OP_MIRROR: u32 = 28;
 const OP_OFFSET: u32 = 29;
 const OP_VIDEO_LIMITER: u32 = 30;
 const OP_LUMETRI: u32 = 31;
+const OP_MOSAIC: u32 = 32;
+const OP_FIND_EDGES: u32 = 33;
+const OP_EMBOSS: u32 = 34;
+const OP_REPLICATE: u32 = 35;
 
 type Target = (wgpu::Texture, wgpu::TextureView);
 
@@ -134,6 +138,10 @@ fn steps(op: &FxOp) -> Vec<Step> {
         FxOp::Invert { channel: 4, blend } => out.push(step(OP_INVERT_ALPHA, [0; 4], &[*blend])),
         FxOp::Invert { channel, blend } => out.push(step(OP_INVERT, [*channel, 0, 0, 0], &[*blend])),
         FxOp::Posterize { n } => out.push(step(OP_POSTERIZE, [0; 4], &[*n])),
+        FxOp::Mosaic { bx, by } => out.push(step(OP_MOSAIC, [(*bx).max(1), (*by).max(1), 0, 0], &[])),
+        FxOp::FindEdges { invert, blend } => out.push(step(OP_FIND_EDGES, [*invert as u32, 0, 0, 0], &[*blend])),
+        FxOp::Emboss { dx, dy, contrast, blend } => out.push(step(OP_EMBOSS, [0; 4], &[*dx, *dy, *contrast, *blend])),
+        FxOp::Replicate { n } => out.push(step(OP_REPLICATE, [(*n).clamp(1, 16), 0, 0, 0], &[])),
         FxOp::Gaussian { rx, ry, repeat } => {
             boxes(rx, false, *repeat, &mut out);
             boxes(ry, true, *repeat, &mut out);
