@@ -70,6 +70,8 @@ const OP_BASIC_3D: u32 = 46;
 const OP_BEVEL_ALPHA: u32 = 47;
 const OP_NOISE: u32 = 48;
 const OP_KEY: u32 = 49;
+const OP_SHADOW_SEED: u32 = 50;
+const OP_SHADOW_COMBINE: u32 = 51;
 
 type Target = (wgpu::Texture, wgpu::TextureView);
 
@@ -109,8 +111,8 @@ struct Step {
     p: [f32; 24],
     /// Unsharp combine: reads the blurred image and the original.
     combine: bool,
-    /// A blur pass of Unsharp Mask (the original stays untouched until the combine).
-    unsharp_blur: bool,
+    /// This pass belongs to an operation that must preserve its pre-effect source texture.
+    preserve_original: bool,
 }
 
 fn step(code: u32, i1: [u32; 4], p: &[f32]) -> Step {
@@ -118,7 +120,7 @@ fn step(code: u32, i1: [u32; 4], p: &[f32]) -> Step {
     for (d, s) in q.iter_mut().zip(p) {
         *d = *s;
     }
-    Step { run: false, code, i1, p: q, combine: false, unsharp_blur: false }
+    Step { run: false, code, i1, p: q, combine: false, preserve_original: false }
 }
 
 /// Box passes along x (vertical = false) or y for the radii (radius 0 is a no-op on the CPU).
@@ -189,6 +191,22 @@ fn steps(op: &FxOp) -> Vec<Step> {
         FxOp::LensDistortion { curvature, cx, cy, norm } => out.push(step(OP_LENS_DISTORTION, [0; 4], &[*curvature, *cx, *cy, *norm])),
         FxOp::Basic3D { swivel, tilt, distance } => out.push(step(OP_BASIC_3D, [0; 4], &[*swivel, *tilt, *distance])),
         FxOp::BevelAlpha { thickness, lx, ly, intensity } => out.push(step(OP_BEVEL_ALPHA, [0; 4], &[*thickness, *lx, *ly, *intensity])),
+        FxOp::DropShadow { dx, dy, color, opacity, only, rx, ry } => {
+            let start = out.len();
+            let mut seed = step(OP_SHADOW_SEED, [*only as u32, 0, 0, 0], &[*dx, *dy, color[0], color[1], color[2], *opacity]);
+            seed.preserve_original = true;
+            out.push(seed);
+            boxes(rx, false, false, &mut out);
+            boxes(ry, true, false, &mut out);
+            for s in &mut out[start..] {
+                s.preserve_original = true;
+            }
+            if !only {
+                let mut combine = step(OP_SHADOW_COMBINE, [0; 4], &[]);
+                combine.combine = true;
+                out.push(combine);
+            }
+        }
         FxOp::Noise { amount, colored, clip, seed } => {
             out.push(step(OP_NOISE, [*colored as u32, *clip as u32, *seed as u32, (*seed >> 32) as u32], &[*amount]));
         }
@@ -208,7 +226,7 @@ fn steps(op: &FxOp) -> Vec<Step> {
             boxes(rx, false, true, &mut out);
             boxes(ry, true, true, &mut out);
             for s in &mut out {
-                s.unsharp_blur = true;
+                s.preserve_original = true;
             }
             let mut s = step(OP_UNSHARP, [0; 4], &[*amount, *threshold]);
             s.combine = true;
@@ -453,7 +471,7 @@ impl FxStage {
             return None;
         }
         let all: Vec<Step> = fx.ops.iter().flat_map(steps).collect();
-        let n = if all.iter().any(|s| s.combine) { 3 } else { 2 };
+        let n = if all.iter().any(|s| s.combine || s.preserve_original) { 3 } else { 2 };
         let targets = self.targets(device, (w, h), n);
         let views: Vec<wgpu::TextureView> = targets.iter().map(|t| t.1.clone()).collect();
         let mut dispatches = Vec::with_capacity(all.len());
@@ -462,10 +480,10 @@ impl FxStage {
         let mut orig: Option<usize> = None;
         for s in &all {
             // (an Unsharp without blur passes, radius 0, combines the original with itself)
-            if (s.unsharp_blur || s.combine) && orig.is_none() {
+            if (s.preserve_original || s.combine) && orig.is_none() {
                 orig = Some(cur);
             }
-            let keep = if s.unsharp_blur || s.combine { orig } else { None };
+            let keep = if s.preserve_original || s.combine { orig } else { None };
             let dst = (0..n).find(|k| *k != cur && Some(*k) != keep)?;
             let aux = match (s.combine, orig) {
                 (true, Some(o)) => views.get(o)?,
