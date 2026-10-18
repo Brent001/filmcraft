@@ -72,6 +72,7 @@ const OP_NOISE: u32 = 48;
 const OP_KEY: u32 = 49;
 const OP_SHADOW_SEED: u32 = 50;
 const OP_SHADOW_COMBINE: u32 = 51;
+const OP_MEDIAN: u32 = 52;
 
 type Target = (wgpu::Texture, wgpu::TextureView);
 
@@ -159,6 +160,11 @@ fn steps(op: &FxOp) -> Vec<Step> {
         FxOp::Invert { channel: 4, blend } => out.push(step(OP_INVERT_ALPHA, [0; 4], &[*blend])),
         FxOp::Invert { channel, blend } => out.push(step(OP_INVERT, [*channel, 0, 0, 0], &[*blend])),
         FxOp::Posterize { n } => out.push(step(OP_POSTERIZE, [0; 4], &[*n])),
+        FxOp::Median { radius } => {
+            if *radius > 0 {
+                out.push(step(OP_MEDIAN, [*radius, 0, 0, 0], &[]));
+            }
+        }
         FxOp::Mosaic { bx, by } => out.push(step(OP_MOSAIC, [(*bx).max(1), (*by).max(1), 0, 0], &[])),
         FxOp::FindEdges { invert, blend } => out.push(step(OP_FIND_EDGES, [*invert as u32, 0, 0, 0], &[*blend])),
         FxOp::Emboss { dx, dy, contrast, blend } => out.push(step(OP_EMBOSS, [0; 4], &[*dx, *dy, *contrast, *blend])),
