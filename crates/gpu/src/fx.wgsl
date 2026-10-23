@@ -17,7 +17,7 @@ struct U {
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var src: texture_2d<f32>;
 @group(0) @binding(2) var dst: texture_storage_2d<rgba32float, write>;
-// Unsharp Mask: the image before blurring.
+// Original input kept alive for compound effects (Unsharp Mask, Drop Shadow).
 @group(0) @binding(3) var aux: texture_2d<f32>;
 
 const OP_BRIGHTNESS_CONTRAST: u32 = 1u;
@@ -50,6 +50,27 @@ const OP_MIRROR: u32 = 28u;
 const OP_OFFSET: u32 = 29u;
 const OP_VIDEO_LIMITER: u32 = 30u;
 const OP_LUMETRI: u32 = 31u;
+const OP_MOSAIC: u32 = 32u;
+const OP_FIND_EDGES: u32 = 33u;
+const OP_EMBOSS: u32 = 34u;
+const OP_REPLICATE: u32 = 35u;
+const OP_STROBE: u32 = 36u;
+const OP_LUMA_KEY: u32 = 37u;
+const OP_FOUR_COLOR_GRADIENT: u32 = 38u;
+const OP_RAMP: u32 = 39u;
+const OP_CIRCLE: u32 = 40u;
+const OP_GRID: u32 = 41u;
+const OP_LENS_FLARE: u32 = 42u;
+const OP_TWIRL: u32 = 43u;
+const OP_WAVE_WARP: u32 = 44u;
+const OP_LENS_DISTORTION: u32 = 45u;
+const OP_BASIC_3D: u32 = 46u;
+const OP_BEVEL_ALPHA: u32 = 47u;
+const OP_NOISE: u32 = 48u;
+const OP_KEY: u32 = 49u;
+const OP_SHADOW_SEED: u32 = 50u;
+const OP_SHADOW_COMBINE: u32 = 51u;
+const OP_MEDIAN: u32 = 52u;
 
 fn size() -> vec2<i32> {
     return vec2<i32>(i32(u.i0.y), i32(u.i0.z));
@@ -66,6 +87,11 @@ fn ld_or_clear(p: vec2<i32>) -> vec4<f32> {
         return vec4(0.0);
     }
     return textureLoad(src, p, 0);
+}
+
+fn ld_clamped(p: vec2<i32>) -> vec4<f32> {
+    let s = size();
+    return textureLoad(src, clamp(p, vec2<i32>(0, 0), s - vec2<i32>(1, 1)), 0);
 }
 
 // `Image::sample_bilinear`: pixel centres at +0.5, transparent outside.
@@ -134,6 +160,87 @@ fn dec(c: vec3<f32>) -> vec3<f32> {
 
 fn luma709(c: vec3<f32>) -> f32 {
     return 0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z;
+}
+
+fn edge_luma(p: vec2<i32>) -> f32 {
+    return luma709(ld_clamped(p).rgb);
+}
+
+// Exact 3x3 median per premultiplied RGBA channel. Larger radii stay on the CPU,
+// where the original implementation uses the same clamped neighbourhood and total ordering.
+fn median_channel(p: vec2<i32>, channel: u32) -> f32 {
+    var values: array<f32, 9>;
+    var k = 0u;
+    for (var dy = -1; dy <= 1; dy = dy + 1) {
+        for (var dx = -1; dx <= 1; dx = dx + 1) {
+            let c = ld_clamped(p + vec2<i32>(dx, dy));
+            var v = c.r;
+            if channel == 1u { v = c.g; }
+            if channel == 2u { v = c.b; }
+            if channel == 3u { v = c.a; }
+            values[k] = v;
+            k = k + 1u;
+        }
+    }
+    // Insertion sort of nine scalar samples, then select the middle value.
+    for (var i = 1u; i < 9u; i = i + 1u) {
+        let v = values[i];
+        var j = i;
+        loop {
+            if j == 0u { break; }
+            if values[j - 1u] <= v { break; }
+            values[j] = values[j - 1u];
+            j = j - 1u;
+        }
+        values[j] = v;
+    }
+    return values[4u];
+}
+
+// u64 is represented as (low32, high32), allowing the deterministic CPU noise hash to
+// run identically on WGSL implementations that do not expose a native 64-bit integer type.
+fn mul_hi_u32(a: u32, b: u32) -> u32 {
+    let a0 = a & 0xffffu;
+    let a1 = a >> 16u;
+    let b0 = b & 0xffffu;
+    let b1 = b >> 16u;
+    let w0 = a0 * b0;
+    let t = a1 * b0 + (w0 >> 16u);
+    let mid1 = t & 0xffffu;
+    let mid2 = a0 * b1 + mid1;
+    return a1 * b1 + (t >> 16u) + (mid2 >> 16u);
+}
+
+fn mul64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
+    return vec2<u32>(a.x * b.x, mul_hi_u32(a.x, b.x) + a.x * b.y + a.y * b.x);
+}
+
+fn shr64(v: vec2<u32>, n: u32) -> vec2<u32> {
+    if n == 0u {
+        return v;
+    }
+    if n < 32u {
+        return vec2<u32>((v.x >> n) | (v.y << (32u - n)), v.y >> n);
+    }
+    return vec2<u32>(v.y >> (n - 32u), 0u);
+}
+
+fn add_seed64(seed: vec2<u32>, amount: u32) -> vec2<u32> {
+    let lo = seed.x + amount;
+    let carry = select(0u, 1u, lo < seed.x);
+    return vec2<u32>(lo, seed.y + carry);
+}
+
+fn noise_hash64(x: u32, y: u32, seed: vec2<u32>) -> f32 {
+    let x64 = vec2<u32>(x, 0u);
+    let y64 = vec2<u32>(y, 0u);
+    var h = mul64(x64, vec2<u32>(0x7F4A7C15u, 0x9E3779B9u))
+          ^ mul64(y64, vec2<u32>(0x27D4EB4Fu, 0xC2B2AE3Du))
+          ^ mul64(seed, vec2<u32>(0x9E3779F9u, 0x165667B1u));
+    h = h ^ shr64(h, 31u);
+    h = mul64(h, vec2<u32>(0x1CE4E5B9u, 0xBF58476Du));
+    h = h ^ shr64(h, 29u);
+    return f32(h.y >> 8u) / 16777216.0;
 }
 
 // `f32::powf` for x >= 0 (WGSL leaves pow(0, y) undefined).
@@ -435,6 +542,13 @@ fn color_op(op: u32, c: vec3<f32>) -> vec3<f32> {
             }
             return dec(v + (repl - v) * k);
         }
+        case OP_STROBE: {
+            if u.i1.x == 0u {
+                return c;
+            }
+            let lc = dec(u.p0.xyz);
+            return lc + (c - lc) * u.p0.w;
+        }
         default: {
             return c;
         }
@@ -587,18 +701,327 @@ fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
             }
             return acc / f32(steps);
         }
-        case OP_UNSHARP: {
-            // src: the blurred image, aux: the original
-            var o = textureLoad(aux, p, 0);
-            let bq = ld(p);
-            let amount = u.p0.x; let th = u.p0.y;
-            for (var k = 0; k < 3; k++) {
-                let d = o[k] - bq[k];
-                if abs(d) >= th * o.a {
-                    o[k] = max(o[k] + d * amount, 0.0);
+        case OP_MEDIAN: {
+            return vec4<f32>(
+                median_channel(p, 0u),
+                median_channel(p, 1u),
+                median_channel(p, 2u),
+                median_channel(p, 3u)
+            );
+        }
+        case OP_MOSAIC: {
+            let bx = max(f32(max(u.i1.x, 1u)), 1.0);
+            let by = max(f32(max(u.i1.y, 1u)), 1.0);
+            let bw = max(f32(s.x) / bx, 1.0);
+            let bh = max(f32(s.y) / by, 1.0);
+            let cx = (floor(f32(p.x) / bw) + 0.5) * bw;
+            let cy = (floor(f32(p.y) / bh) + 0.5) * bh;
+            return sample_clamped(cx, cy);
+        }
+        case OP_FIND_EDGES: {
+            let gx = edge_luma(p + vec2<i32>(1, -1)) + 2.0 * edge_luma(p + vec2<i32>(1, 0)) + edge_luma(p + vec2<i32>(1, 1))
+                   - edge_luma(p + vec2<i32>(-1, -1)) - 2.0 * edge_luma(p + vec2<i32>(-1, 0)) - edge_luma(p + vec2<i32>(-1, 1));
+            let gy = edge_luma(p + vec2<i32>(-1, 1)) + 2.0 * edge_luma(p + vec2<i32>(0, 1)) + edge_luma(p + vec2<i32>(1, 1))
+                   - edge_luma(p + vec2<i32>(-1, -1)) - 2.0 * edge_luma(p + vec2<i32>(0, -1)) - edge_luma(p + vec2<i32>(1, -1));
+            var m = min(sqrt(gx * gx + gy * gy), 1.0);
+            if u.i1.x == 0u {
+                m = 1.0 - m;
+            }
+            let o = ld(p);
+            let rgb = vec3<f32>(m * o.a * (1.0 - u.p0.x)) + o.rgb * u.p0.x;
+            return vec4<f32>(rgb, o.a);
+        }
+        case OP_EMBOSS: {
+            let dx = u.p0.x;
+            let dy = u.p0.y;
+            let contrast = u.p0.z;
+            let blend = u.p0.w;
+            let a = sample_clamped(pc.x + dx, pc.y + dy);
+            let bq = sample_clamped(pc.x - dx, pc.y - dy);
+            let v = srgb_to_linear1(clamp(0.5 + (luma709(a.rgb) - luma709(bq.rgb)) * contrast * 2.0, 0.0, 1.0));
+            let o = ld(p);
+            return vec4<f32>(vec3<f32>(v * o.a * (1.0 - blend)) + o.rgb * blend, o.a);
+        }
+        case OP_REPLICATE: {
+            let n = max(i32(u.i1.x), 1);
+            let ux = (p.x * n) % s.x;
+            let vy = (p.y * n) % s.y;
+            let sx = f32(ux) + 0.5 + (f32(n) - 1.0) * 0.5 / f32(n);
+            let sy = f32(vy) + 0.5;
+            return sample_clamped(sx, sy);
+        }
+        case OP_LUMA_KEY: {
+            let o = ld(p);
+            if o.a <= 0.0 {
+                return o;
+            }
+            let c = o.rgb / o.a;
+            let l = linear_to_srgb1(max(luma709(c), 0.0));
+            let threshold = u.p0.x;
+            let cutoff = u.p0.y;
+            var k = 0.0;
+            if l <= cutoff {
+                k = 0.0;
+            } else if l >= max(threshold, cutoff + 1e-3) {
+                k = 1.0;
+            } else {
+                k = (l - cutoff) / max(threshold - cutoff, 1e-3);
+            }
+            return o * k;
+        }
+        case OP_NOISE: {
+            let o = ld(p);
+            if o.a <= 0.0 {
+                return o;
+            }
+            let seed = vec2<u32>(u.i1.z, u.i1.w);
+            let x = u32(p.x);
+            let y = u32(p.y);
+            let n0 = noise_hash64(x, y, seed) - 0.5;
+            var noise = vec3<f32>(n0);
+            if u.i1.x != 0u {
+                noise.y = noise_hash64(x, y, add_seed64(seed, 7777u)) - 0.5;
+                noise.z = noise_hash64(x, y, add_seed64(seed, 99991u)) - 0.5;
+            }
+            var rgb = enc(o.rgb / o.a) + noise * u.p0.x;
+            if u.i1.y != 0u {
+                rgb = clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+            }
+            let out_rgb = dec(rgb);
+            return vec4<f32>(out_rgb * o.a, o.a);
+        }
+        case OP_KEY: {
+            let o = ld(p);
+            if o.a <= 0.0 {
+                return o;
+            }
+            let c = enc(o.rgb / o.a);
+            let y = 0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z;
+            let cb = (c.z - y) / (2.0 * (1.0 - 0.0722));
+            let cr = (c.x - y) / (2.0 * (1.0 - 0.2126));
+            let delta = vec3<f32>(y, cb, cr) - u.p0.xyz;
+            let d = sqrt(delta.y * delta.y + delta.z * delta.z) + abs(delta.x) * 0.15;
+            let alpha = clamp((d - u.p0.w) / u.p1.x, 0.0, 1.0);
+            var out_rgb = c;
+            let spill = u.p1.y;
+            let dom = u.i1.x;
+            if spill > 0.0 {
+                if dom == 0u {
+                    let others = (out_rgb.y + out_rgb.z) / 2.0;
+                    if out_rgb.x > others { out_rgb.x -= (out_rgb.x - others) * spill; }
+                } else if dom == 1u {
+                    let others = (out_rgb.x + out_rgb.z) / 2.0;
+                    if out_rgb.y > others { out_rgb.y -= (out_rgb.y - others) * spill; }
+                } else {
+                    let others = (out_rgb.x + out_rgb.y) / 2.0;
+                    if out_rgb.z > others { out_rgb.z -= (out_rgb.z - others) * spill; }
                 }
             }
-            return o;
+            if u.i1.y == 1u {
+                return vec4<f32>(vec3<f32>(alpha * o.a), o.a);
+            }
+            let a = o.a * alpha;
+            return vec4<f32>(dec(out_rgb) * a, a);
+        }
+        case OP_FOUR_COLOR_GRADIENT: {
+            let c1 = vec3<f32>(u.p0.x, u.p0.y, u.p0.z);
+            let c2 = vec3<f32>(u.p0.w, u.p1.x, u.p1.y);
+            let c3 = vec3<f32>(u.p1.z, u.p1.w, u.p2.x);
+            let c4 = vec3<f32>(u.p2.y, u.p2.z, u.p2.w);
+            let expn = u.p3.y;
+            let a = max(length(pc - vec2<f32>(f32(s.x) * 0.25, f32(s.y) * 0.25)), 1.0);
+            let b = max(length(pc - vec2<f32>(f32(s.x) * 0.75, f32(s.y) * 0.25)), 1.0);
+            let c = max(length(pc - vec2<f32>(f32(s.x) * 0.25, f32(s.y) * 0.75)), 1.0);
+            let d = max(length(pc - vec2<f32>(f32(s.x) * 0.75, f32(s.y) * 0.75)), 1.0);
+            let wa = 1.0 / powf(a, expn);
+            let wb = 1.0 / powf(b, expn);
+            let wc = 1.0 / powf(c, expn);
+            let wd = 1.0 / powf(d, expn);
+            let rgb = dec((c1 * wa + c2 * wb + c3 * wc + c4 * wd) / (wa + wb + wc + wd));
+            let op = u.p3.x;
+            let o = ld(p);
+            return vec4<f32>(rgb * op + o.rgb * (1.0 - op), op + o.a * (1.0 - op));
+        }
+        case OP_RAMP: {
+            let start = u.p0.xy;
+            let end = u.p0.zw;
+            let sc = u.p1.xyz;
+            let ec = vec3<f32>(u.p1.w, u.p2.x, u.p2.y);
+            let blend = u.p2.z;
+            let v = end - start;
+            let len2 = max(dot(v, v), 1e-9);
+            var t = 0.0;
+            if u.i1.x == 1u {
+                t = length(pc - start) / sqrt(len2);
+            } else {
+                t = dot(pc - start, v) / len2;
+            }
+            t = clamp(t, 0.0, 1.0);
+            let rgb = dec(sc + (ec - sc) * t);
+            let op = 1.0 - blend;
+            let o = ld(p);
+            return vec4<f32>(rgb * op + o.rgb * (1.0 - op), op + o.a * (1.0 - op));
+        }
+        case OP_CIRCLE: {
+            let center = u.p0.xy;
+            let radius = u.p0.z;
+            let col = dec(vec3<f32>(u.p0.w, u.p1.x, u.p1.y));
+            let op = u.p1.z;
+            let a = clamp(radius - length(pc - center) + 0.5, 0.0, 1.0) * op;
+            let o = ld(p);
+            if a <= 0.0 {
+                return o;
+            }
+            return vec4<f32>(col * a + o.rgb * (1.0 - a), a + o.a * (1.0 - a));
+        }
+        case OP_GRID: {
+            let size = max(u.p0.x, 1.0);
+            let border = u.p0.y;
+            let col = dec(vec3<f32>(u.p0.z, u.p0.w, u.p1.x));
+            let op = u.p1.y;
+            let ox = f32(s.x) / 2.0;
+            let oy = f32(s.y) / 2.0;
+            let rx = f32(p.x) - ox;
+            let ry = f32(p.y) - oy;
+            let mx = rx - floor(rx / size) * size;
+            let my = ry - floor(ry / size) * size;
+            let gx = min(mx, size - mx);
+            let gy = min(my, size - my);
+            let a = clamp(border * 0.5 - min(gx, gy) + 0.5, 0.0, 1.0) * op;
+            let o = ld(p);
+            if a <= 0.0 {
+                return o;
+            }
+            return vec4<f32>(col * a + o.rgb * (1.0 - a), a + o.a * (1.0 - a));
+        }
+        case OP_LENS_FLARE: {
+            let center = u.p0.xy;
+            let brightness = u.p0.z;
+            let blend = u.p0.w;
+            let scale = max(f32(max(s.x, s.y)), 1.0);
+            let d = length(pc - center) / scale;
+            var add = vec3<f32>(1.0, 0.9, 0.7) * (0.35 * exp(-d * 18.0) + 0.08 * exp(-d * 3.0));
+            let mx = f32(s.x) / 2.0;
+            let my = f32(s.y) / 2.0;
+            let g0 = center + (vec2<f32>(mx, my) - center) * (2.0 * 0.5);
+            let g1 = center + (vec2<f32>(mx, my) - center) * (2.0 * 1.3);
+            let g2 = center + (vec2<f32>(mx, my) - center) * (2.0 * 1.7);
+            let d0 = length(pc - g0) / scale;
+            let d1 = length(pc - g1) / scale;
+            let d2 = length(pc - g2) / scale;
+            let r0 = max(1.0 - abs((d0 - 0.05) / 0.01), 0.0) * 0.15 + select(0.0, 0.06, d0 < 0.05);
+            let r1 = max(1.0 - abs((d1 - 0.03) / 0.01), 0.0) * 0.15 + select(0.0, 0.06, d1 < 0.03);
+            let r2 = max(1.0 - abs((d2 - 0.08) / 0.01), 0.0) * 0.15 + select(0.0, 0.06, d2 < 0.08);
+            add += vec3<f32>(0.4, 0.6, 1.0) * r0;
+            add += vec3<f32>(1.0, 0.5, 0.3) * r1;
+            add += vec3<f32>(0.4, 1.0, 0.5) * r2;
+            let o = ld(p);
+            return vec4<f32>(o.rgb + add * brightness * (1.0 - blend) * max(o.a, 0.0), o.a);
+        }
+        case OP_TWIRL: {
+            let center = u.p0.xy;
+            let angle = u.p0.z;
+            let radius = u.p0.w;
+            let delta = pc - center;
+            let d = length(delta);
+            if d >= radius {
+                return ld(p);
+            }
+            let k = 1.0 - d / radius;
+            let a = angle * k * k;
+            let sn = sin(a);
+            let cs = cos(a);
+            let uv = center + vec2<f32>(delta.x * cs - delta.y * sn, delta.x * sn + delta.y * cs);
+            return sample_bilinear(uv.x, uv.y);
+        }
+        case OP_WAVE_WARP: {
+            let height = u.p0.x;
+            let width = max(u.p0.y, 1.0);
+            let ux = u.p0.z;
+            let uy = u.p0.w;
+            let phase = u.p1.x;
+            let along = pc.x * ux + pc.y * uy;
+            let off = height * sin(along / width * 6.283185307179586 - phase);
+            return sample_bilinear(pc.x - uy * off, pc.y + ux * off);
+        }
+        case OP_LENS_DISTORTION: {
+            let curvature = u.p0.x;
+            let center = u.p0.yz;
+            let norm = max(u.p0.w, 1e-6);
+            let delta = (pc - center) / norm;
+            let r2 = dot(delta, delta);
+            let k = 1.0 - curvature * r2;
+            let uv = center + delta * k * norm;
+            return sample_bilinear(uv.x, uv.y);
+        }
+        case OP_BASIC_3D: {
+            let sw = u.p0.x;
+            let tl = u.p0.y;
+            let dist = u.p0.z;
+            let w = f32(s.x);
+            let h = f32(s.y);
+            let focal = max(w, h) * 1.2;
+            let px = pc.x - w / 2.0;
+            let py = pc.y - h / 2.0;
+            let ss = sin(sw);
+            let cs = cos(sw);
+            let st = sin(tl);
+            let ct = cos(tl);
+            let normal = vec3<f32>(ss * ct, -st, cs * ct);
+            let basis_u = vec3<f32>(cs, 0.0, -ss);
+            let basis_v = vec3<f32>(ss * st, ct, cs * st);
+            let z0 = focal + dist * 10.0;
+            let dir = vec3<f32>(px, py, focal);
+            let denom = dot(normal, dir);
+            if abs(denom) < 1e-9 {
+                return vec4<f32>(0.0);
+            }
+            let tt = (normal.z * z0) / denom;
+            if tt <= 0.0 {
+                return vec4<f32>(0.0);
+            }
+            let hit = dir * tt - vec3<f32>(0.0, 0.0, z0);
+            let su = dot(hit, basis_u);
+            let sv = dot(hit, basis_v);
+            return sample_bilinear(su + w / 2.0, sv + h / 2.0);
+        }
+        case OP_BEVEL_ALPHA: {
+            let thickness = u.p0.x;
+            let lx = u.p0.y;
+            let ly = u.p0.z;
+            let intensity = u.p0.w;
+            let gx = sample_clamped(pc.x + thickness, pc.y).a - sample_clamped(pc.x - thickness, pc.y).a;
+            let gy = sample_clamped(pc.x, pc.y + thickness).a - sample_clamped(pc.x, pc.y - thickness).a;
+            let o = ld(p);
+            let shade = -(gx * lx + gy * ly) * intensity;
+            return vec4<f32>(clamp(o.rgb + vec3<f32>(shade * o.a), vec3<f32>(0.0), vec3<f32>(o.a)), o.a);
+        }
+        case OP_SHADOW_SEED: {
+            let dx = u.p0.x;
+            let dy = u.p0.y;
+            let color = dec(vec3<f32>(u.p0.z, u.p0.w, u.p1.x));
+            let opacity = u.p1.y;
+            let source_alpha = sample_bilinear(pc.x - dx, pc.y - dy).a;
+            let a = source_alpha * opacity;
+            return vec4<f32>(color * a, a);
+        }
+        case OP_SHADOW_COMBINE: {
+            let shadow = ld(p);
+            let original = textureLoad(aux, p, 0);
+            // The CPU reference places the original over the shadow using Normal compositing.
+            return original + shadow * (1.0 - original.a);
+        }
+        case OP_UNSHARP: {
+            // src: the blurred image, aux: the original. Each colour channel on its own, as
+            // `effects::unsharp_boxes`, written as vector math: FXC (DX12 without dxcompiler.dll)
+            // aborts on a write to `o[k]` inside a loop ("internal error: compilation aborted
+            // unexpectedly"), which took the whole `fx` pipeline down with it.
+            let o = textureLoad(aux, p, 0);
+            let bq = ld(p);
+            let amount = u.p0.x; let th = u.p0.y;
+            let d = o.rgb - bq.rgb;
+            let sharpened = max(o.rgb + d * amount, vec3(0.0));
+            return vec4(select(o.rgb, sharpened, abs(d) >= vec3(th * o.a)), o.a);
         }
         case OP_CROP: {
             let x0 = u.p0.x; let x1 = u.p0.y; let y0 = u.p0.z; let y1 = u.p0.w; let fe = u.p1.x;
