@@ -493,7 +493,6 @@ impl AudioEffect for SurroundReverb {
     }
 }
 
-
 #[cfg(test)]
 mod reverb_batch_tests {
     use super::*;
