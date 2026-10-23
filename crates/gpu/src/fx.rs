@@ -52,6 +52,27 @@ const OP_MIRROR: u32 = 28;
 const OP_OFFSET: u32 = 29;
 const OP_VIDEO_LIMITER: u32 = 30;
 const OP_LUMETRI: u32 = 31;
+const OP_MOSAIC: u32 = 32;
+const OP_FIND_EDGES: u32 = 33;
+const OP_EMBOSS: u32 = 34;
+const OP_REPLICATE: u32 = 35;
+const OP_STROBE: u32 = 36;
+const OP_LUMA_KEY: u32 = 37;
+const OP_FOUR_COLOR_GRADIENT: u32 = 38;
+const OP_RAMP: u32 = 39;
+const OP_CIRCLE: u32 = 40;
+const OP_GRID: u32 = 41;
+const OP_LENS_FLARE: u32 = 42;
+const OP_TWIRL: u32 = 43;
+const OP_WAVE_WARP: u32 = 44;
+const OP_LENS_DISTORTION: u32 = 45;
+const OP_BASIC_3D: u32 = 46;
+const OP_BEVEL_ALPHA: u32 = 47;
+const OP_NOISE: u32 = 48;
+const OP_KEY: u32 = 49;
+const OP_SHADOW_SEED: u32 = 50;
+const OP_SHADOW_COMBINE: u32 = 51;
+const OP_MEDIAN: u32 = 52;
 
 type Target = (wgpu::Texture, wgpu::TextureView);
 
@@ -70,6 +91,7 @@ struct Dispatch {
     run: bool,
     bg: wgpu::BindGroup,
     groups: (u32, u32),
+    uniform_offset: u32,
 }
 
 /// The recorded work of one layer's effects (bind groups made; recorded into the frame's encoder
@@ -78,6 +100,8 @@ pub(crate) struct FxJob {
     source_bg: wgpu::BindGroup,
     source_target: wgpu::TextureView,
     dispatches: Vec<Dispatch>,
+    /// One aligned uniform buffer shared by every pass in the effect chain.
+    _uniforms: wgpu::Buffer,
     /// The texture holding the result.
     pub(crate) result: wgpu::TextureView,
     pub(crate) result_texture: wgpu::Texture,
@@ -91,8 +115,10 @@ struct Step {
     p: [f32; 24],
     /// Unsharp combine: reads the blurred image and the original.
     combine: bool,
-    /// A blur pass of Unsharp Mask (the original stays untouched until the combine).
-    unsharp_blur: bool,
+    /// This pass belongs to an operation that must preserve its pre-effect source texture.
+    preserve_original: bool,
+    /// Release the preserved texture after this final pass (for source-only effects).
+    release_original_after: bool,
 }
 
 fn step(code: u32, i1: [u32; 4], p: &[f32]) -> Step {
@@ -100,7 +126,7 @@ fn step(code: u32, i1: [u32; 4], p: &[f32]) -> Step {
     for (d, s) in q.iter_mut().zip(p) {
         *d = *s;
     }
-    Step { run: false, code, i1, p: q, combine: false, unsharp_blur: false }
+    Step { run: false, code, i1, p: q, combine: false, preserve_original: false, release_original_after: false }
 }
 
 /// Box passes along x (vertical = false) or y for the radii (radius 0 is a no-op on the CPU).
@@ -134,6 +160,74 @@ fn steps(op: &FxOp) -> Vec<Step> {
         FxOp::Invert { channel: 4, blend } => out.push(step(OP_INVERT_ALPHA, [0; 4], &[*blend])),
         FxOp::Invert { channel, blend } => out.push(step(OP_INVERT, [*channel, 0, 0, 0], &[*blend])),
         FxOp::Posterize { n } => out.push(step(OP_POSTERIZE, [0; 4], &[*n])),
+        FxOp::Median { radius } => {
+            if *radius > 0 {
+                out.push(step(OP_MEDIAN, [*radius, 0, 0, 0], &[]));
+            }
+        }
+        FxOp::Mosaic { bx, by } => out.push(step(OP_MOSAIC, [(*bx).max(1), (*by).max(1), 0, 0], &[])),
+        FxOp::FindEdges { invert, blend } => out.push(step(OP_FIND_EDGES, [*invert as u32, 0, 0, 0], &[*blend])),
+        FxOp::Emboss { dx, dy, contrast, blend } => out.push(step(OP_EMBOSS, [0; 4], &[*dx, *dy, *contrast, *blend])),
+        FxOp::Replicate { n } => out.push(step(OP_REPLICATE, [(*n).clamp(1, 16), 0, 0, 0], &[])),
+        FxOp::Strobe { color, blend, active } => out.push(step(OP_STROBE, [*active as u32, 0, 0, 0], &[color[0], color[1], color[2], *blend])),
+        FxOp::LumaKey { threshold, cutoff } => out.push(step(OP_LUMA_KEY, [0; 4], &[*threshold, *cutoff])),
+        FxOp::FourColorGradient { colors, opacity, blend_exp } => {
+            let p = [
+                colors[0][0], colors[0][1], colors[0][2],
+                colors[1][0], colors[1][1], colors[1][2],
+                colors[2][0], colors[2][1], colors[2][2],
+                colors[3][0], colors[3][1], colors[3][2],
+                *opacity, *blend_exp,
+            ];
+            out.push(step(OP_FOUR_COLOR_GRADIENT, [0; 4], &p));
+        }
+        FxOp::Ramp { start, end, start_color, end_color, radial, blend } => {
+            out.push(step(
+                OP_RAMP,
+                [*radial as u32, 0, 0, 0],
+                &[start[0], start[1], end[0], end[1], start_color[0], start_color[1], start_color[2], end_color[0], end_color[1], end_color[2], *blend],
+            ));
+        }
+        FxOp::Circle { cx, cy, radius, color, opacity } => {
+            out.push(step(OP_CIRCLE, [0; 4], &[*cx, *cy, *radius, color[0], color[1], color[2], *opacity]));
+        }
+        FxOp::Grid { size, border, color, opacity } => {
+            out.push(step(OP_GRID, [0; 4], &[*size, *border, color[0], color[1], color[2], *opacity]));
+        }
+        FxOp::LensFlare { cx, cy, brightness, blend } => {
+            out.push(step(OP_LENS_FLARE, [0; 4], &[*cx, *cy, *brightness, *blend]));
+        }
+        FxOp::Twirl { cx, cy, angle, radius } => out.push(step(OP_TWIRL, [0; 4], &[*cx, *cy, *angle, *radius])),
+        FxOp::WaveWarp { height, width, ux, uy, phase } => out.push(step(OP_WAVE_WARP, [0; 4], &[*height, *width, *ux, *uy, *phase])),
+        FxOp::LensDistortion { curvature, cx, cy, norm } => out.push(step(OP_LENS_DISTORTION, [0; 4], &[*curvature, *cx, *cy, *norm])),
+        FxOp::Basic3D { swivel, tilt, distance } => out.push(step(OP_BASIC_3D, [0; 4], &[*swivel, *tilt, *distance])),
+        FxOp::BevelAlpha { thickness, lx, ly, intensity } => out.push(step(OP_BEVEL_ALPHA, [0; 4], &[*thickness, *lx, *ly, *intensity])),
+        FxOp::DropShadow { dx, dy, color, opacity, only, rx, ry } => {
+            let start = out.len();
+            let mut seed = step(OP_SHADOW_SEED, [*only as u32, 0, 0, 0], &[*dx, *dy, color[0], color[1], color[2], *opacity]);
+            seed.preserve_original = true;
+            out.push(seed);
+            boxes(rx, false, false, &mut out);
+            boxes(ry, true, false, &mut out);
+            for s in &mut out[start..] {
+                s.preserve_original = true;
+            }
+            // Release the preserved source after the final shadow pass. When compositing,
+            // the combine pass also ends that scope; in shadow-only mode the last blur/seed pass does.
+            if !*only {
+                let mut combine = step(OP_SHADOW_COMBINE, [0; 4], &[]);
+                combine.combine = true;
+                out.push(combine);
+            } else if let Some(last) = out.last_mut() {
+                last.release_original_after = true;
+            }
+        }
+        FxOp::Noise { amount, colored, clip, seed } => {
+            out.push(step(OP_NOISE, [*colored as u32, *clip as u32, *seed as u32, (*seed >> 32) as u32], &[*amount]));
+        }
+        FxOp::Key { key_ycbcr, tolerance, softness, spill, dominant, output } => {
+            out.push(step(OP_KEY, [*dominant, *output, 0, 0], &[key_ycbcr[0], key_ycbcr[1], key_ycbcr[2], *tolerance, *softness, *spill]));
+        }
         FxOp::Gaussian { rx, ry, repeat } => {
             boxes(rx, false, *repeat, &mut out);
             boxes(ry, true, *repeat, &mut out);
@@ -147,7 +241,7 @@ fn steps(op: &FxOp) -> Vec<Step> {
             boxes(rx, false, true, &mut out);
             boxes(ry, true, true, &mut out);
             for s in &mut out {
-                s.unsharp_blur = true;
+                s.preserve_original = true;
             }
             let mut s = step(OP_UNSHARP, [0; 4], &[*amount, *threshold]);
             s.combine = true;
@@ -282,7 +376,7 @@ impl FxStage {
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: None },
                     count: None,
                 },
                 tex(1),
@@ -392,64 +486,94 @@ impl FxStage {
             return None;
         }
         let all: Vec<Step> = fx.ops.iter().flat_map(steps).collect();
-        let n = if all.iter().any(|s| s.combine) { 3 } else { 2 };
+        let n = if all.iter().any(|s| s.combine || s.preserve_original) { 3 } else { 2 };
         let targets = self.targets(device, (w, h), n);
+        // Batch all per-pass parameters into one aligned upload rather than allocating a
+        // uniform buffer and issuing a queue write for every single effect operation.
+        const UNIFORM_BYTES: usize = 128;
+        let alignment = device.limits().min_uniform_buffer_offset_alignment.max(1) as usize;
+        let uniform_stride = UNIFORM_BYTES.div_ceil(alignment) * alignment;
+        let uniform_size = uniform_stride.checked_mul(all.len().max(1))?;
+        let mut uniform_data = vec![0u8; uniform_size];
+        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("filmcraft-fx-uniforms"),
+            size: uniform_size as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let views: Vec<wgpu::TextureView> = targets.iter().map(|t| t.1.clone()).collect();
         let mut dispatches = Vec::with_capacity(all.len());
+        // The same 2–3 pooled textures are reused throughout a chain. Cache bind groups by
+        // texture routing and vary only the dynamic uniform offset between operations.
+        let mut bind_groups: HashMap<(usize, usize, Option<usize>), wgpu::BindGroup> = HashMap::new();
         let mut cur = 0usize;
         // Unsharp: the image its blur started from (kept while its blur passes run)
         let mut orig: Option<usize> = None;
-        for s in &all {
+        for (pass_index, s) in all.iter().enumerate() {
             // (an Unsharp without blur passes, radius 0, combines the original with itself)
-            if (s.unsharp_blur || s.combine) && orig.is_none() {
+            if (s.preserve_original || s.combine) && orig.is_none() {
                 orig = Some(cur);
             }
-            let keep = if s.unsharp_blur || s.combine { orig } else { None };
+            let keep = if s.preserve_original || s.combine { orig } else { None };
             let dst = (0..n).find(|k| *k != cur && Some(*k) != keep)?;
-            let aux = match (s.combine, orig) {
-                (true, Some(o)) => views.get(o)?,
-                _ => dummy,
+            let aux_index = if s.combine { orig } else { None };
+            let aux = match aux_index {
+                Some(o) => views.get(o)?,
+                None => dummy,
             };
-            let mut bytes = Vec::with_capacity(128);
+            let byte_offset = pass_index.checked_mul(uniform_stride)?;
+            let uniform_offset = u32::try_from(byte_offset).ok()?;
+            let mut cursor = byte_offset;
             for v in [s.code, w, h, 0].iter().chain(&s.i1) {
-                bytes.extend_from_slice(&v.to_le_bytes());
+                uniform_data[cursor..cursor + 4].copy_from_slice(&v.to_le_bytes());
+                cursor += 4;
             }
             for v in &s.p {
-                bytes.extend_from_slice(&v.to_le_bytes());
+                uniform_data[cursor..cursor + 4].copy_from_slice(&v.to_le_bytes());
+                cursor += 4;
             }
-            let buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("fx-u"),
-                size: bytes.len() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            queue.write_buffer(&buf, 0, &bytes);
-            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("fx"),
-                layout: &self.bgl,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(views.get(cur)?) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(views.get(dst)?) },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(aux) },
-                ],
-            });
+            let bg_key = (cur, dst, aux_index);
+            let bg = if let Some(bg) = bind_groups.get(&bg_key) {
+                bg.clone()
+            } else {
+                let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("fx"),
+                    layout: &self.bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &uniforms,
+                                offset: 0,
+                                size: std::num::NonZeroU64::new(UNIFORM_BYTES as u64),
+                            }),
+                        },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(views.get(cur)?) },
+                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(views.get(dst)?) },
+                        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(aux) },
+                    ],
+                });
+                bind_groups.insert(bg_key, bg.clone());
+                bg
+            };
             let groups = if s.run {
                 let lines = if s.i1[2] != 0 { w } else { h };
                 (lines.div_ceil(64), 1)
             } else {
                 (w.div_ceil(16), h.div_ceil(16))
             };
-            dispatches.push(Dispatch { run: s.run, bg, groups });
+            dispatches.push(Dispatch { run: s.run, bg, groups, uniform_offset });
             cur = dst;
-            if s.combine {
+            if s.combine || s.release_original_after {
                 orig = None;
             }
         }
+        queue.write_buffer(&uniforms, 0, &uniform_data);
         Some(FxJob {
             source_bg,
             source_target: views.first()?.clone(),
             dispatches,
+            _uniforms: uniforms,
             result: views.get(cur)?.clone(),
             result_texture: targets.get(cur)?.0.clone(),
         })
@@ -481,7 +605,7 @@ impl FxStage {
         let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("fx"), timestamp_writes: None });
         for d in &job.dispatches {
             pass.set_pipeline(if d.run { &self.run } else { &self.px });
-            pass.set_bind_group(0, &d.bg, &[]);
+            pass.set_bind_group(0, &d.bg, &[d.uniform_offset]);
             pass.dispatch_workgroups(d.groups.0, d.groups.1, 1);
         }
     }
