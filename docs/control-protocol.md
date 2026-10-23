@@ -6,12 +6,16 @@ The desktop control server listens on `127.0.0.1:<port>` only. The default port 
 **Settings-driven autostart:** open Settings → **Control & MCP**, enable **Enable MCP / Control Server on
 Startup**, and keep or change the port. The next normal desktop launch starts the authenticated control
 server automatically. The app creates a 256-bit random token in `control-token` under FilmCraft's data
-directory; on Unix this file is restricted to the owning user (mode `0600`). The MCP bridge reads the
-same file automatically, so the usual same-user workflow does not need a terminal environment variable.
-The token is never shown in Settings or written to the log. This setting starts FilmCraft's local
-control endpoint; your MCP host still needs a one-time MCP server entry that launches
-`filmcraft-cli mcp --bridge 127.0.0.1:9876`. Once configured, the MCP host starts that bridge
-automatically, so you don't need to run the command in a terminal yourself.
+directory; on Unix this file is restricted to the owning user (mode `0600`). Unless
+`FILMCRAFT_CONTROL_TOKEN` is set, FilmCraft generates a 256-bit random token; if the environment
+token is set, FilmCraft writes that same token to the private file so a separate MCP bridge can read
+it. If an existing token file disagrees with the environment token, startup fails closed rather than
+silently changing credentials. The MCP bridge reads the same file automatically, so the usual same-user
+workflow does not need a terminal environment variable. The token is never shown in Settings or
+written to the log. This setting starts FilmCraft's local control endpoint; your MCP host still needs
+a one-time MCP server entry that launches `filmcraft-cli mcp --bridge 127.0.0.1:9876`. Once
+configured, the MCP host starts that bridge automatically, so you don't need to run the command in a
+terminal yourself.
 
 **Manual/agent launch:** `filmcraft --control 9876` (or `FILMCRAFT_CONTROL_PORT`) starts the control
 server for an explicit agent-driven launch. It requires `FILMCRAFT_CONTROL_TOKEN`: 64 hexadecimal
