@@ -20,8 +20,8 @@ Options:
   --data-dir <dir>   folder for auto-save, crash recovery and logs
                      (also: FILMCRAFT_DATA_DIR)
   --graphics <mode>  start with this graphics mode and keep it: default,
-                     dx12 (Windows), software (Windows, Linux);
-                     `--graphics default` undoes an automatic fallback
+                     dx12 (Windows), vulkan (Windows, Linux), software
+                     (Windows, Linux); `--graphics default` undoes a fallback
   --version          print the version and exit
   -h, --help         print this help and exit
 ";
