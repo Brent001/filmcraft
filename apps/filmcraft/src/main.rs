@@ -285,6 +285,7 @@ fn app_creator(
                 Err(e) => log::error!("recovery failed: {e}"),
             }
         }
+        let cpu_preview_compositor = session.prefs.gpu.preview_compositor == "cpu";
         let mut app = FilmcraftApp::new(session);
         app.graphics_notice = notice;
         if recover == Some(false) {
@@ -293,10 +294,10 @@ fn app_creator(
         app.integrated_titlebar = cfg!(target_os = "macos");
         if let Some(rs) = cc.wgpu_render_state.clone()
             && std::env::var_os("FILMCRAFT_CPU_COMPOSITE").is_none()
-            && session.prefs.gpu.preview_compositor != "cpu"
+            && !cpu_preview_compositor
         {
             app.set_wgpu(rs);
-        } else if session.prefs.gpu.preview_compositor == "cpu" {
+        } else if cpu_preview_compositor {
             log::info!("CPU compositor selected in Settings; GPU preview compositing is disabled");
         }
         // Keep device selection available even when the default device is unavailable.
