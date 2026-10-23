@@ -1079,6 +1079,7 @@ mod gpu_control_preference_tests {
         assert_eq!(prefs.gpu.preview_compositor, "auto");
         assert_eq!(prefs.gpu.power_preference, "highPerformance");
         assert!(prefs.gpu.export_acceleration);
+        assert_eq!(prefs.gpu.upload_cache_entries, 24);
         assert!(!prefs.control.autostart);
         assert_eq!(prefs.control.port, 9876);
     }
@@ -1089,6 +1090,7 @@ mod gpu_control_preference_tests {
         prefs.set("gpu.previewCompositor", json!("cpu")).expect("known compositor");
         prefs.set("gpu.powerPreference", json!("lowPower")).expect("known power preference");
         prefs.set("gpu.exportAcceleration", json!(false)).expect("boolean setting");
+        prefs.set("gpu.uploadCacheEntries", json!(48)).expect("valid upload cache budget");
         prefs.set("control.autostart", json!(true)).expect("boolean setting");
         prefs.set("control.port", json!(12345)).expect("valid port");
         assert!(prefs.set("gpu.powerPreference", json!("maximum")).is_err());
@@ -1097,6 +1099,7 @@ mod gpu_control_preference_tests {
         assert_eq!(loaded.gpu.preview_compositor, "cpu");
         assert_eq!(loaded.gpu.power_preference, "lowPower");
         assert!(!loaded.gpu.export_acceleration);
+        assert_eq!(loaded.gpu.upload_cache_entries, 48);
         assert!(loaded.control.autostart);
         assert_eq!(loaded.control.port, 12345);
     }
@@ -1113,6 +1116,7 @@ mod gpu_control_preference_tests {
         assert_eq!(migrated.version, crate::settings::PREFS_VERSION);
         assert_eq!(migrated.gpu.preview_compositor, "auto");
         assert_eq!(migrated.gpu.power_preference, "highPerformance");
+        assert_eq!(migrated.gpu.upload_cache_entries, 24);
         assert!(!migrated.control.autostart);
         assert_eq!(migrated.control.port, 9876);
     }
