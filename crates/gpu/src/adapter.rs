@@ -328,7 +328,6 @@ mod tests {
         assert_eq!(choose(&[], HighPerformance), None);
     }
 
-
     /// An Intel UHD Graphics 630 (Coffee Lake) on driver 25.20.100.6576 as wgpu 30 lists it. A
     /// Vulkan device on it died inside `igvk64.dll` (0xc0000005) as it was created.
     fn uhd_630() -> Vec<Candidate> {

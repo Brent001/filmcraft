@@ -480,10 +480,7 @@ impl FxOp {
                 let radius = if radius.is_finite() && radius > 0.0 { radius.round().clamp(0.0, cap) as u32 } else { 0 };
                 FxOp::Median { radius }
             }
-            "mosaic" => FxOp::Mosaic {
-                bx: f(e, "horizontal", cx).max(1.0) as u32,
-                by: f(e, "vertical", cx).max(1.0) as u32,
-            },
+            "mosaic" => FxOp::Mosaic { bx: f(e, "horizontal", cx).max(1.0) as u32, by: f(e, "vertical", cx).max(1.0) as u32 },
             "find_edges" => FxOp::FindEdges { invert: b(e, "invert"), blend: f(e, "blend", cx) / 100.0 },
             "emboss" => {
                 let dir = (f(e, "direction", cx) as f64).to_radians();
@@ -500,19 +497,12 @@ impl FxOp {
                 let period = f(e, "period", cx).max(0.001) as f64;
                 let duration = f(e, "duration", cx) as f64;
                 let c = color(e, "color", cx);
-                FxOp::Strobe {
-                    color: [c[0], c[1], c[2]],
-                    blend: f(e, "blend", cx) / 100.0,
-                    active: cx.seconds % period < duration,
-                }
+                FxOp::Strobe { color: [c[0], c[1], c[2]], blend: f(e, "blend", cx) / 100.0, active: cx.seconds % period < duration }
             }
             "luma_key" => FxOp::LumaKey { threshold: f(e, "threshold", cx) / 100.0, cutoff: f(e, "cutoff", cx) / 100.0 },
-            "noise" => FxOp::Noise {
-                amount: f(e, "amount", cx) / 100.0,
-                colored: b(e, "color"),
-                clip: b(e, "clip"),
-                seed: crate::effects::noise_frame_seed(cx),
-            },
+            "noise" => {
+                FxOp::Noise { amount: f(e, "amount", cx) / 100.0, colored: b(e, "color"), clip: b(e, "clip"), seed: crate::effects::noise_frame_seed(cx) }
+            }
             "color_key" | "ultra_key" => {
                 let ultra = e.effect == "ultra_key";
                 let kc = if ultra { color(e, "key_color", cx) } else { color(e, "color", cx) };
@@ -527,7 +517,13 @@ impl FxOp {
                 } else {
                     (f(e, "tolerance", cx) / 255.0 * 0.6 + 0.01, f(e, "feather", cx) / 50.0 * 0.2 + 0.01, 0.0, 0)
                 };
-                let dominant = if kc[1] >= kc[0] && kc[1] >= kc[2] { 1 } else if kc[2] >= kc[0] { 2 } else { 0 };
+                let dominant = if kc[1] >= kc[0] && kc[1] >= kc[2] {
+                    1
+                } else if kc[2] >= kc[0] {
+                    2
+                } else {
+                    0
+                };
                 FxOp::Key { key_ycbcr, tolerance, softness, spill, dominant, output }
             }
             "four_color_gradient" => {
@@ -577,12 +573,7 @@ impl FxOp {
             "lens_flare" => {
                 let image = Image { w, h, px: Vec::new() };
                 let c = point(e, "center", cx, &image);
-                FxOp::LensFlare {
-                    cx: c.x as f32,
-                    cy: c.y as f32,
-                    brightness: f(e, "brightness", cx) / 100.0,
-                    blend: f(e, "blend", cx) / 100.0,
-                }
+                FxOp::LensFlare { cx: c.x as f32, cy: c.y as f32, brightness: f(e, "brightness", cx) / 100.0, blend: f(e, "blend", cx) / 100.0 }
             }
             "twirl" => {
                 let image = Image { w, h, px: Vec::new() };
@@ -599,13 +590,7 @@ impl FxOp {
                 let width = (f(e, "width", cx) * cx.px_scale).max(1.0);
                 let dir = (f(e, "direction", cx) as f64).to_radians();
                 let phase = cx.seconds * f(e, "speed", cx) as f64 * std::f64::consts::TAU;
-                FxOp::WaveWarp {
-                    height,
-                    width,
-                    ux: dir.sin() as f32,
-                    uy: -(dir.cos() as f32),
-                    phase: phase as f32,
-                }
+                FxOp::WaveWarp { height, width, ux: dir.sin() as f32, uy: -(dir.cos() as f32), phase: phase as f32 }
             }
             "lens_distortion" => {
                 let image = Image { w, h, px: Vec::new() };
@@ -920,11 +905,11 @@ impl FxOp {
             FxOp::Strobe { color, blend, .. } => fin(color) && blend.is_finite(),
             FxOp::LumaKey { threshold, cutoff } => fin(&[*threshold, *cutoff]),
             FxOp::Noise { amount, .. } => amount.is_finite(),
-            FxOp::Key { key_ycbcr, tolerance, softness, spill, dominant, output } =>
-                fin(key_ycbcr) && fin(&[*tolerance, *softness, *spill]) && *dominant <= 2 && *output <= 2,
+            FxOp::Key { key_ycbcr, tolerance, softness, spill, dominant, output } => {
+                fin(key_ycbcr) && fin(&[*tolerance, *softness, *spill]) && *dominant <= 2 && *output <= 2
+            }
             FxOp::FourColorGradient { colors, opacity, blend_exp } => colors.iter().all(|c| fin(c)) && fin(&[*opacity, *blend_exp]),
-            FxOp::Ramp { start, end, start_color, end_color, blend, .. } =>
-                fin(start) && fin(end) && fin(start_color) && fin(end_color) && blend.is_finite(),
+            FxOp::Ramp { start, end, start_color, end_color, blend, .. } => fin(start) && fin(end) && fin(start_color) && fin(end_color) && blend.is_finite(),
             FxOp::Circle { cx, cy, radius, color, opacity } => fin(&[*cx, *cy, *radius, *opacity]) && fin(color),
             FxOp::Grid { size, border, color, opacity } => fin(&[*size, *border, *opacity]) && fin(color),
             FxOp::LensFlare { cx, cy, brightness, blend } => fin(&[*cx, *cy, *brightness, *blend]),
@@ -1202,11 +1187,7 @@ impl FxOp {
                         }
                         let n0 = crate::effects::hash3(x, y, seed) - 0.5;
                         let ns = if colored {
-                            [
-                                n0,
-                                crate::effects::hash3(x, y, seed.wrapping_add(7777)) - 0.5,
-                                crate::effects::hash3(x, y, seed.wrapping_add(99_991)) - 0.5,
-                            ]
+                            [n0, crate::effects::hash3(x, y, seed.wrapping_add(7777)) - 0.5, crate::effects::hash3(x, y, seed.wrapping_add(99_991)) - 0.5]
                         } else {
                             [n0; 3]
                         };
@@ -1273,11 +1254,8 @@ impl FxOp {
                 let (vx, vy) = (ex - sx, ey - sy);
                 let len2 = (vx * vx + vy * vy).max(1e-9);
                 crate::effects::fill_over(img, 1.0 - blend, |x, y| {
-                    let t = (if radial {
-                        ((x - sx).powi(2) + (y - sy).powi(2)).sqrt() / len2.sqrt()
-                    } else {
-                        ((x - sx) * vx + (y - sy) * vy) / len2
-                    }).clamp(0.0, 1.0);
+                    let t = (if radial { ((x - sx).powi(2) + (y - sy).powi(2)).sqrt() / len2.sqrt() } else { ((x - sx) * vx + (y - sy) * vy) / len2 })
+                        .clamp(0.0, 1.0);
                     dec([sc[0] + (ec[0] - sc[0]) * t, sc[1] + (ec[1] - sc[1]) * t, sc[2] + (ec[2] - sc[2]) * t])
                 });
             }
@@ -1391,9 +1369,13 @@ impl FxOp {
                     let z0 = focal + dist * 10.0;
                     let dir = [px, py, focal];
                     let denom = n[0] * dir[0] + n[1] * dir[1] + n[2] * dir[2];
-                    if denom.abs() < 1e-9 { return None; }
+                    if denom.abs() < 1e-9 {
+                        return None;
+                    }
                     let tt = (n[2] * z0) / denom;
-                    if tt <= 0.0 { return None; }
+                    if tt <= 0.0 {
+                        return None;
+                    }
                     let hit = [dir[0] * tt, dir[1] * tt, dir[2] * tt - z0];
                     let su = hit[0] * u[0] + hit[1] * u[1] + hit[2] * u[2];
                     let sv = hit[0] * v[0] + hit[1] * v[1] + hit[2] * v[2];

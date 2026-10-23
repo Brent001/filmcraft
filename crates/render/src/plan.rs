@@ -204,13 +204,7 @@ fn gpu_chain<'a>(project: &Project, item: &'a TrackItem, opts: RenderOptions) ->
 /// Build the Source-monitor frame as a one-layer GPU plan when the exact Rec. 709
 /// source decode can be reproduced by the compositor. Unsupported source colour transforms
 /// return None and remain on the CPU reference path.
-pub fn plan_source_item(
-    project: &Project,
-    item: ItemId,
-    t: Tick,
-    scale: f32,
-    sources: &dyn SourceProvider,
-) -> Option<FramePlan> {
+pub fn plan_source_item(project: &Project, item: ItemId, t: Tick, scale: f32, sources: &dyn SourceProvider) -> Option<FramePlan> {
     let pi = project.item(item)?;
     if matches!(pi.kind, ItemKind::Sequence(_)) {
         return Some(plan_frame(project, item, t, RenderOptions { scale, ..Default::default() }, sources));
@@ -223,11 +217,7 @@ pub fn plan_source_item(
     let pipeline = &filmcraft_color::ColorPipeline::REC709;
     let source_space = crate::colorman::source_space(project, item, &frame);
     let needs_management = crate::colorman::needs_management(pipeline, source_space, &frame);
-    let input = if needs_management {
-        crate::colorman::gpu_input(project, item, pipeline, source_space, &frame)
-    } else {
-        None
-    };
+    let input = if needs_management { crate::colorman::gpu_input(project, item, pipeline, source_space, &frame) } else { None };
     // Do not approximate source colour management. Log/HDR/RGB cases without an exact
     // compositor transform continue through render_item() on the CPU.
     if needs_management && input.is_none() {

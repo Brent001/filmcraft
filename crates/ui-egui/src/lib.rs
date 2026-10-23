@@ -534,12 +534,7 @@ impl FilmcraftApp {
 
     /// Composite into a monitor-specific retained texture. Program and Source render in the same
     /// egui frame, so they must not share the compositor's transient output target or native ID.
-    pub fn gpu_present_for_slot(
-        &mut self,
-        key: FrameKey,
-        plan: &frames::GpuPlan,
-        slot: u64,
-    ) -> Option<(egui::TextureId, (u32, u32))> {
+    pub fn gpu_present_for_slot(&mut self, key: FrameKey, plan: &frames::GpuPlan, slot: u64) -> Option<(egui::TextureId, (u32, u32))> {
         if self.gpu.as_ref()?.broken.load(std::sync::atomic::Ordering::Relaxed) {
             self.disable_gpu("device error");
             return None;

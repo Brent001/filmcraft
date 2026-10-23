@@ -771,12 +771,7 @@ impl GpuCompositor {
 
     /// Composite to an independent output for a specific UI monitor slot. This prevents two
     /// monitors from overwriting the same native texture between layout and GPU presentation.
-    pub fn composite_prepared_for_slot(
-        &mut self,
-        plan: &FramePlan,
-        prep: Option<&PreparedPlan>,
-        slot: u64,
-    ) -> (wgpu::TextureView, (u32, u32)) {
+    pub fn composite_prepared_for_slot(&mut self, plan: &FramePlan, prep: Option<&PreparedPlan>, slot: u64) -> (wgpu::TextureView, (u32, u32)) {
         self.output_slot = slot;
         self.render_plan(plan, prep, true, true)
     }

@@ -173,11 +173,20 @@ fn steps(op: &FxOp) -> Vec<Step> {
         FxOp::LumaKey { threshold, cutoff } => out.push(step(OP_LUMA_KEY, [0; 4], &[*threshold, *cutoff])),
         FxOp::FourColorGradient { colors, opacity, blend_exp } => {
             let p = [
-                colors[0][0], colors[0][1], colors[0][2],
-                colors[1][0], colors[1][1], colors[1][2],
-                colors[2][0], colors[2][1], colors[2][2],
-                colors[3][0], colors[3][1], colors[3][2],
-                *opacity, *blend_exp,
+                colors[0][0],
+                colors[0][1],
+                colors[0][2],
+                colors[1][0],
+                colors[1][1],
+                colors[1][2],
+                colors[2][0],
+                colors[2][1],
+                colors[2][2],
+                colors[3][0],
+                colors[3][1],
+                colors[3][2],
+                *opacity,
+                *blend_exp,
             ];
             out.push(step(OP_FOUR_COLOR_GRADIENT, [0; 4], &p));
         }

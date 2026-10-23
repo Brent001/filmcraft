@@ -928,8 +928,7 @@ fn plan_source_job(job: &Job, item: ItemId, pool: &Arc<MediaPool>, services: &Ar
     if let Some(plan) = filmcraft_render::plan::plan_source_item(&job.project, item, job.time, job.scale, &provider) {
         return (plan, false);
     }
-    let img = filmcraft_render::render_item(&job.project, item, job.time, job.scale, &provider)
-        .unwrap_or_else(|| filmcraft_render::Image::new(1, 1));
+    let img = filmcraft_render::render_item(&job.project, item, job.time, job.scale, &provider).unwrap_or_else(|| filmcraft_render::Image::new(1, 1));
     (filmcraft_render::plan::FramePlan::Image(img), false)
 }
 
