@@ -756,27 +756,13 @@ fn custom(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, name: &str
             let mode = choice_text(get(&d.values, "gpu.previewCompositor"));
             if let Some(g) = app.gpu.as_ref() {
                 let adapter = g.render_state.adapter.get_info();
+                note(ui, &t, &format!("GPU compositor active: {} ({:?}, {:?})", adapter.name, adapter.backend, adapter.device_type));
                 note(
                     ui,
                     &t,
-                    &format!("GPU compositor active: {} ({:?}, {:?})", adapter.name, adapter.backend, adapter.device_type),
+                    &format!("Last compositor call: {:.2} ms · output: {}×{} · maximum texture side: {}", g.last_ms, g.size.0, g.size.1, g.max_texture),
                 );
-                note(
-                    ui,
-                    &t,
-                    &format!(
-                        "Last compositor call: {:.2} ms · output: {}×{} · maximum texture side: {}",
-                        g.last_ms, g.size.0, g.size.1, g.max_texture
-                    ),
-                );
-                note(
-                    ui,
-                    &t,
-                    &format!(
-                        "GPU transitions: {} · CPU-fallback transitions: {}",
-                        g.compositor.gpu_transitions, g.compositor.cpu_transitions
-                    ),
-                );
+                note(ui, &t, &format!("GPU transitions: {} · CPU-fallback transitions: {}", g.compositor.gpu_transitions, g.compositor.cpu_transitions));
                 note(
                     ui,
                     &t,
@@ -816,7 +802,11 @@ fn custom(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, name: &str
             let state = if enabled { "Autostart is enabled for the next launch." } else { "Autostart is disabled." };
             note(ui, &t, state);
             note(ui, &t, &format!("Local endpoint: 127.0.0.1:{port}"));
-            note(ui, &t, "The MCP bridge reads the same private control-token file from the FilmCraft data directory. The token itself is never displayed here.");
+            note(
+                ui,
+                &t,
+                "The MCP bridge reads the same private control-token file from the FilmCraft data directory. The token itself is never displayed here.",
+            );
         }
         "mediaCacheInfo" => {
             if d.cache_info.is_null() {

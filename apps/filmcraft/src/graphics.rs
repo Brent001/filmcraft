@@ -29,8 +29,9 @@
 //! # Getting back
 //! A fallback mode shows a notice with a reset button in the window (`graphics.notice.reset`,
 //! [`GraphicsStart::reset_to_default`]); `--graphics default` does the same from the command
-//! line, and `--graphics dx12|software` picks a mode by hand. An explicit `WGPU_BACKEND` leaves
-//! the saved state alone: the user is in charge.
+//! line, and `--graphics dx12|vulkan|software` picks a mode by hand. Settings ▸ GPU & Performance
+//! can make the same backend choice for normal launches. An explicit `WGPU_BACKEND` leaves the
+//! saved crash-recovery state alone: the user is in charge.
 //!
 //! All files are written beside and renamed into place, so a reader never sees half a file; two
 //! instances updating [`STATE_FILE`] at the same moment can lose one update (a failure counted
@@ -70,6 +71,8 @@ pub enum Mode {
     Default,
     /// DirectX 12 only (Windows), for Vulkan drivers that crash at start-up.
     Dx12,
+    /// Vulkan only (Windows and Linux).
+    Vulkan,
     /// A software adapter (WARP on Windows, lavapipe / llvmpipe elsewhere); the preview then
     /// composites on the CPU (`FilmcraftApp::set_wgpu`).
     Software,
@@ -81,6 +84,7 @@ impl Mode {
         match self {
             Mode::Default => "default",
             Mode::Dx12 => "dx12",
+            Mode::Vulkan => "vulkan",
             Mode::Software => "software",
         }
     }
@@ -88,24 +92,27 @@ impl Mode {
     /// The English name shown in the interface (translated there).
     pub fn label(self) -> &'static str {
         match self {
-            Mode::Default => "default graphics",
+            Mode::Default => "automatic graphics",
             Mode::Dx12 => "DirectX 12 only",
+            Mode::Vulkan => "Vulkan only",
             Mode::Software => "software rendering",
         }
     }
 
     pub fn parse(name: &str) -> Option<Mode> {
-        [Mode::Default, Mode::Dx12, Mode::Software].into_iter().find(|m| m.name() == name)
+        [Mode::Default, Mode::Dx12, Mode::Vulkan, Mode::Software].into_iter().find(|m| m.name() == name)
     }
 }
 
 /// The modes tried in order on this platform. macOS has only Metal, and no software adapter.
 pub const LADDER: &[Mode] = if cfg!(target_os = "windows") {
-    &[Mode::Default, Mode::Dx12, Mode::Software]
+    // Automatic tries Vulkan + DX12 without GL; if startup repeatedly fails, try DX12, then
+    // Vulkan, then the CPU compositor on a software adapter.
+    &[Mode::Default, Mode::Dx12, Mode::Vulkan, Mode::Software]
 } else if cfg!(target_os = "macos") {
     &[Mode::Default]
 } else {
-    &[Mode::Default, Mode::Software]
+    &[Mode::Default, Mode::Vulkan, Mode::Software]
 };
 
 /// The mode after `mode` in `ladder`, if any.
@@ -300,7 +307,7 @@ impl GraphicsStart {
         let file = state.display();
         let next = match forced {
             Some(mode) => {
-                log::info!("graphics mode {} chosen with --graphics", mode.name());
+                log::info!("graphics mode {} explicitly selected", mode.name());
                 Saved { mode, failures: 0 }
             }
             None => {
@@ -432,12 +439,7 @@ pub fn apply(options: &mut NativeOptions, mode: Mode, backend_override: Option<B
 
 /// Apply the user's launch-time GPU power preference while preserving the adapter filtering and
 /// crash-safe backend selection below.
-pub fn apply_with_power_preference(
-    options: &mut NativeOptions,
-    mode: Mode,
-    backend_override: Option<Backends>,
-    preference: &str,
-) {
+pub fn apply_with_power_preference(options: &mut NativeOptions, mode: Mode, backend_override: Option<Backends>, preference: &str) {
     // Keep wgpu's documented environment override higher priority than the saved preference.
     if std::env::var_os("WGPU_POWER_PREF").is_none()
         && let WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup
@@ -460,14 +462,31 @@ fn apply_for(options: &mut NativeOptions, mode: Mode, backend_override: Option<B
     // Pro: the device is lost and the window never opens. `WGPU_VALIDATION_INDIRECT_CALL=1` turns
     // the check back on.
     create.instance_descriptor.flags = create.instance_descriptor.flags.difference(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL).with_env();
+    // DXC is Microsoft's maintained DX12 shader compiler. FilmCraft's compute effects use WGSL
+    // that legacy FXC cannot compile reliably. Windows packages bundle dxcompiler.dll; keep an
+    // explicit WGPU_DX12_COMPILER override authoritative.
+    #[cfg(target_os = "windows")]
+    if windows {
+        let bundled_dxc = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join("dxcompiler.dll"))).filter(|path| path.is_file());
+        let shader_compiler = match bundled_dxc {
+            Some(path) => {
+                log::info!("DX12 shader compiler: bundled DXC at {}", path.display());
+                wgpu::Dx12Compiler::DynamicDxc { dxc_path: path.to_string_lossy().into_owned() }
+            }
+            None => {
+                log::warn!("DX12 shader compiler: bundled dxcompiler.dll not found; using wgpu automatic compiler selection");
+                wgpu::Dx12Compiler::Auto
+            }
+        };
+        create.instance_descriptor.backend_options.dx12.shader_compiler = shader_compiler.with_env();
+    }
     match mode {
         // eframe's default (`WGPU_BACKEND`, else PRIMARY | GL), except on Windows: there it
         // includes GL. Creating that backend can crash inside AMD's atio6axx.dll before adapter
         // selection or any Rust error handling runs, so the window never appears. Choosing an
-        // adapter afterwards is too late: only leaving GL out of the instance avoids it. Keep
-        // Vulkan and DX12 both: forcing DX12 alone sends shaders through FXC (which rejects
-        // fx.wgsl, silently falling back to the CPU) and leaves machines without DX12 with no
-        // backend at all.
+        // adapter afterwards is too late: only leaving GL out of the instance avoids it. Keep both
+        // Vulkan and DX12 in Auto: either backend may be unavailable, and DX12 needs its DXC
+        // runtime to compile FilmCraft's WGSL compute effects.
         Mode::Default if windows => {
             create.instance_descriptor.backends = backend_override.unwrap_or(Backends::PRIMARY);
             // wgpu's own choice of adapter, except for a GPU that Windows lists through two
@@ -479,8 +498,17 @@ fn apply_for(options: &mut NativeOptions, mode: Mode, backend_override: Option<B
                 Some(Arc::new(move |adapters: &[wgpu::Adapter], surface: Option<&wgpu::Surface<'_>>| filmcraft_gpu::adapter::pick(adapters, surface, power)));
         }
         Mode::Default => {}
-        // Without Vulkan, whose driver is what crashes; GPU effects may fall back to the CPU.
+        // DirectX 12 only: useful when Vulkan's driver crashes or has incomplete WGSL support.
         Mode::Dx12 => create.instance_descriptor.backends = Backends::DX12,
+        // Vulkan only. On Windows use the same duplicate-driver-aware adapter selection as Auto,
+        // but the instance contains Vulkan adapters only; elsewhere use wgpu's normal choice.
+        Mode::Vulkan if windows => {
+            create.instance_descriptor.backends = Backends::VULKAN;
+            let power = create.power_preference;
+            create.native_adapter_selector =
+                Some(Arc::new(move |adapters: &[wgpu::Adapter], surface: Option<&wgpu::Surface<'_>>| filmcraft_gpu::adapter::pick(adapters, surface, power)));
+        }
+        Mode::Vulkan => create.instance_descriptor.backends = Backends::VULKAN,
         Mode::Software => {
             create.instance_descriptor.backends = software_backends(windows);
             create.native_adapter_selector = Some(Arc::new(pick_software));
@@ -513,8 +541,8 @@ pub fn is_graphics_failure(err: &eframe::Error) -> bool {
 mod tests {
     use super::*;
 
-    const WINDOWS: &[Mode] = &[Mode::Default, Mode::Dx12, Mode::Software];
-    const LINUX: &[Mode] = &[Mode::Default, Mode::Software];
+    const WINDOWS: &[Mode] = &[Mode::Default, Mode::Dx12, Mode::Vulkan, Mode::Software];
+    const LINUX: &[Mode] = &[Mode::Default, Mode::Vulkan, Mode::Software];
     const MACOS: &[Mode] = &[Mode::Default];
 
     fn configured(mode: Mode, backend_override: Option<Backends>, windows: bool) -> (Backends, bool) {
@@ -531,7 +559,7 @@ mod tests {
         if std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_some() {
             return;
         }
-        for mode in [Mode::Default, Mode::Dx12, Mode::Software] {
+        for mode in [Mode::Default, Mode::Dx12, Mode::Vulkan, Mode::Software] {
             let mut options = NativeOptions::default();
             apply_for(&mut options, mode, None, false);
             let WgpuSetup::CreateNew(create) = options.wgpu_options.wgpu_setup else {
@@ -558,11 +586,13 @@ mod tests {
     }
 
     #[test]
-    fn only_the_windows_default_and_software_modes_choose_the_adapter() {
+    fn adapter_selection_is_backend_aware_on_windows() {
         for backend_override in [None, Some(Backends::VULKAN), Some(Backends::DX12)] {
             assert!(configured(Mode::Default, backend_override, true).1);
-            // elsewhere, and in DirectX 12 only mode, the adapter is wgpu's own choice
+            assert!(configured(Mode::Vulkan, backend_override, true).1);
+            // Off Windows wgpu chooses the Vulkan adapter; DX12 is a Windows-only backend.
             assert!(!configured(Mode::Default, backend_override, false).1);
+            assert!(!configured(Mode::Vulkan, backend_override, false).1);
             assert!(!configured(Mode::Dx12, backend_override, true).1);
         }
         assert!(configured(Mode::Software, None, true).1 && configured(Mode::Software, None, false).1);
@@ -579,6 +609,8 @@ mod tests {
     fn fallback_modes_leave_out_the_crashing_backends() {
         // DX12 only: Intel's and AMD's Vulkan drivers are what crashed (#512, #413).
         assert_eq!(configured(Mode::Dx12, None, true), (Backends::DX12, false));
+        assert_eq!(configured(Mode::Vulkan, None, true), (Backends::VULKAN, true));
+        assert_eq!(configured(Mode::Vulkan, None, false), (Backends::VULKAN, false));
         // Software on Windows is WARP (DX12), never GL (atio6axx.dll, #477).
         assert_eq!(configured(Mode::Software, None, true), (Backends::DX12, true));
         assert_eq!(configured(Mode::Software, None, false), (Backends::VULKAN | Backends::GL, true));
@@ -612,10 +644,11 @@ mod tests {
         assert_eq!(mode_after(None, &[], WINDOWS), (Mode::Default, 0, false));
         // one start died: counted, but the same mode is tried again
         assert_eq!(mode_after(None, &[dead(Mode::Default)], WINDOWS), (Mode::Default, 1, false));
-        // the second in a row moves on: DX12, then software
+        // Windows moves default → DX12 → Vulkan → software; Linux skips DX12.
         assert_eq!(mode_after(saved(Mode::Default, 1), &[dead(Mode::Default)], WINDOWS), (Mode::Dx12, 0, true));
-        assert_eq!(mode_after(saved(Mode::Dx12, 1), &[dead(Mode::Dx12)], WINDOWS), (Mode::Software, 0, true));
-        assert_eq!(mode_after(saved(Mode::Default, 1), &[dead(Mode::Default)], LINUX), (Mode::Software, 0, true));
+        assert_eq!(mode_after(saved(Mode::Dx12, 1), &[dead(Mode::Dx12)], WINDOWS), (Mode::Vulkan, 0, true));
+        assert_eq!(mode_after(saved(Mode::Vulkan, 1), &[dead(Mode::Vulkan)], WINDOWS), (Mode::Software, 0, true));
+        assert_eq!(mode_after(saved(Mode::Default, 1), &[dead(Mode::Default)], LINUX), (Mode::Vulkan, 0, true));
         // two dead instances found at once count as two
         assert_eq!(mode_after(None, &[dead(Mode::Default), dead(Mode::Default)], WINDOWS), (Mode::Dx12, 0, true));
         // a saved mode is kept

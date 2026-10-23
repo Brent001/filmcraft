@@ -20,8 +20,8 @@ Options:
   --data-dir <dir>   folder for auto-save, crash recovery and logs
                      (also: FILMCRAFT_DATA_DIR)
   --graphics <mode>  start with this graphics mode and keep it: default,
-                     dx12 (Windows), software (Windows, Linux);
-                     `--graphics default` undoes an automatic fallback
+                     dx12 (Windows), vulkan (Windows, Linux), software
+                     (Windows, Linux); `--graphics default` undoes a fallback
   --version          print the version and exit
   -h, --help         print this help and exit
 ";
@@ -91,7 +91,7 @@ pub fn parse(env_control_port: Option<String>, args: impl IntoIterator<Item = Os
             "--no-recover" => l.recover = Some(false),
             "--data-dir" => l.data_dir = Some(args.next().map(PathBuf::from).ok_or("--data-dir needs a folder")?),
             "--graphics" => {
-                let name = args.next().ok_or("--graphics needs a mode: default, dx12 or software")?;
+                let name = args.next().ok_or("--graphics needs a mode: default, dx12, vulkan or software")?;
                 l.graphics = Some(graphics_mode(&name.to_string_lossy())?);
             }
             // everything after `--` is a file, whatever it looks like
@@ -318,7 +318,11 @@ mod tests {
             assert!(parse_args(&["--graphics", mode.name()]).unwrap_err().contains("not available"));
         }
         assert!(parse_args(&["--graphics"]).is_err(), "missing mode");
-        assert!(parse_args(&["--graphics", "vulkan"]).unwrap_err().contains("vulkan"));
+        if LADDER.contains(&Mode::Vulkan) {
+            assert_eq!(launch(&["--graphics", "vulkan"]).graphics, Some(Mode::Vulkan));
+        } else {
+            assert!(parse_args(&["--graphics", "vulkan"]).unwrap_err().contains("vulkan"));
+        }
         assert!(parse_args(&["--graphics", "DEFAULT"]).is_err());
         assert!(parse_args(&["--graphics", &"x".repeat(1 << 16)]).is_err());
         assert!(USAGE.contains("--graphics"));

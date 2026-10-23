@@ -120,8 +120,7 @@ pub fn start_managed(port: u16, ctx: egui::Context, token: String) -> Result<Rec
     if !valid_token(&token) {
         return Err("the MCP control token is invalid".into());
     }
-    let listener = TcpListener::bind(("127.0.0.1", port))
-        .map_err(|e| format!("cannot listen on 127.0.0.1:{port}: {e}"))?;
+    let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("cannot listen on 127.0.0.1:{port}: {e}"))?;
     let (tx, rx) = channel::<ControlRequest>();
     log::info!("FilmCraft MCP / Control Server listening on 127.0.0.1:{port}");
     std::thread::spawn(move || accept_loop(listener, tx, ctx, token));
@@ -538,16 +537,10 @@ mod autostart_token_tests {
         let dir = temp_dir("environment");
         let _ = std::fs::remove_dir_all(&dir);
         let expected = "ab".repeat(32);
-        assert_eq!(
-            ensure_token_file_with_preference(&dir, Some(&expected)).expect("valid environment token should be saved"),
-            expected
-        );
+        assert_eq!(ensure_token_file_with_preference(&dir, Some(&expected)).expect("valid environment token should be saved"), expected);
         let file = dir.join(filmcraft_engine::autosave::CONTROL_TOKEN_FILE);
         assert_eq!(std::fs::read_to_string(&file).expect("saved token"), expected);
-        assert_eq!(
-            ensure_token_file_with_preference(&dir, Some(&expected)).expect("matching environment token"),
-            expected
-        );
+        assert_eq!(ensure_token_file_with_preference(&dir, Some(&expected)).expect("matching environment token"), expected);
         assert!(ensure_token_file_with_preference(&dir, Some(&"cd".repeat(32))).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -24,8 +24,9 @@ use crate::{EngineError, Result, Session};
 
 /// Version of the preferences file layout ([`crate::autosave::Preferences::version`]).
 /// v1: original Auto Save / audio / playback / trim preferences; v2: all Settings categories;
-/// v3: GPU acceleration and authenticated desktop control-server preferences.
-pub const PREFS_VERSION: u32 = 3;
+/// v3: GPU acceleration and authenticated desktop control-server preferences; v4: explicit
+/// Vulkan / DirectX 12 backend selection.
+pub const PREFS_VERSION: u32 = 4;
 
 // ------------------------------------------------------------------ category values
 
@@ -705,6 +706,8 @@ impl Default for MemoryPrefs {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct GpuPrefs {
+    /// `auto`, `dx12` (Windows) or `vulkan` (Windows/Linux).
+    pub backend: String,
     /// `auto` (GPU with safe CPU fallback) or `cpu`.
     pub preview_compositor: String,
     /// `highPerformance`, `lowPower`, or `none`.
@@ -718,6 +721,7 @@ pub struct GpuPrefs {
 impl Default for GpuPrefs {
     fn default() -> Self {
         Self {
+            backend: "auto".into(),
             preview_compositor: "auto".into(),
             power_preference: "highPerformance".into(),
             export_acceleration: true,
@@ -1021,6 +1025,12 @@ const MOUSE_SCROLL: &[(&str, &str)] = &[("vertical", "Vertical"), ("horizontal",
 const HW_DECODE: &[(&str, &str)] = &[("auto", "Auto"), ("off", "Off")];
 const GPU_COMPOSITORS: &[(&str, &str)] = &[("auto", "Automatic (GPU, with CPU fallback)"), ("cpu", "CPU only")];
 const GPU_POWER: &[(&str, &str)] = &[("highPerformance", "High performance"), ("lowPower", "Low power"), ("none", "System default")];
+#[cfg(target_os = "windows")]
+const GPU_BACKENDS: &[(&str, &str)] = &[("auto", "Automatic (Vulkan + DirectX 12)"), ("dx12", "DirectX 12"), ("vulkan", "Vulkan")];
+#[cfg(target_os = "linux")]
+const GPU_BACKENDS: &[(&str, &str)] = &[("auto", "Automatic (system default)"), ("vulkan", "Vulkan")];
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+const GPU_BACKENDS: &[(&str, &str)] = &[("auto", "Automatic (system default)")];
 const TRACKS: &[(&str, &str)] = &[("useFile", "Use File"), ("mono", "Mono"), ("stereo", "Stereo"), ("5.1", "5.1"), ("adaptive", "Adaptive")];
 pub const DURATION_UNITS: &[(&str, &str)] = &[("frames", "Frames"), ("seconds", "Seconds")];
 
@@ -1199,6 +1209,7 @@ static CATEGORIES: &[Category] = &[
             Row::Group(
                 "Acceleration",
                 &[
+                    f("gpu.backend", "GPU backend", Kind::Choice(GPU_BACKENDS), true),
                     f("gpu.previewCompositor", "Preview compositor", Kind::Choice(GPU_COMPOSITORS), true),
                     f("gpu.powerPreference", "GPU power preference", Kind::Choice(GPU_POWER), true),
                     b("gpu.exportAcceleration", "GPU-accelerated export", true),
@@ -1206,7 +1217,7 @@ static CATEGORIES: &[Category] = &[
                 ],
             ),
             Row::Note(
-                "Preview compositor, GPU power preference, upload-cache limit and GPU export acceleration apply at the next launch. Higher upload-cache limits retain more source frames in memory. Unsupported devices continue on the CPU compositor. FilmCraft reports compositor submission time, uploads and GPU/CPU transition counts; cross-platform GPU utilization percentages are not available through wgpu.",
+                "GPU backend, preview compositor, power preference, upload-cache limit and GPU export acceleration apply at the next launch. Windows supports Automatic, Vulkan or DirectX 12; Linux supports Automatic or Vulkan. DX12 selects Microsoft's DXC shader compiler when the bundled runtime is present. Failed startup still uses FilmCraft's graphics recovery and CPU fallback.",
             ),
         ],
     },
@@ -1572,6 +1583,11 @@ pub fn migrate(v: &mut Value) {
         // populated from Defaults, so existing users retain the current automatic GPU behavior
         // and MCP stays disabled until explicitly enabled.
         m.insert("version".into(), json!(3));
+    }
+    if ver < 4 {
+        // v4 adds an explicit GPU backend choice, defaulting to Auto so existing installs retain
+        // the platform's combined/automatic backend selection.
+        m.insert("version".into(), json!(4));
     }
     // Files from before appearance modes had one Color Theme: keep showing it, as a fixed Dark or
     // Light mode, instead of switching established users to another theme or to Auto.
