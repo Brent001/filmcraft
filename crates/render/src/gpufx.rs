@@ -9,7 +9,7 @@
 //! op to the GPU when [`FxOp::gpu_ok`] says the shader covers it (finite numbers, no minifying
 //! resample), otherwise the clip is rendered on the CPU as before.
 
-use filmcraft_color::{hsl_to_rgb, linear_to_srgb, luma709, rgb_to_hsl};
+use filmcraft_color::{hsl_to_rgb, linear_to_srgb, luma709, rgb_to_hsl, srgb_to_linear};
 use filmcraft_geom::Affine;
 use filmcraft_project::EffectInstance;
 use rayon::prelude::*;
@@ -93,6 +93,125 @@ pub enum FxOp {
     },
     Posterize {
         n: f32,
+    },
+    /// Exact 3×3 median. Larger radii intentionally remain on the CPU to preserve behaviour.
+    Median {
+        radius: u32,
+    },
+    /// Pixelate blocks, with horizontal and vertical block counts.
+    Mosaic {
+        bx: u32,
+        by: u32,
+    },
+    /// Sobel edge detector, blended over the source in premultiplied space.
+    FindEdges {
+        invert: bool,
+        blend: f32,
+    },
+    /// Directional embossed-lighting pass.
+    Emboss {
+        dx: f32,
+        dy: f32,
+        contrast: f32,
+        blend: f32,
+    },
+    /// Repeat the source pattern in both dimensions.
+    Replicate {
+        n: u32,
+    },
+    Strobe {
+        color: [f32; 3],
+        blend: f32,
+        active: bool,
+    },
+    LumaKey {
+        threshold: f32,
+        cutoff: f32,
+    },
+    Noise {
+        amount: f32,
+        colored: bool,
+        clip: bool,
+        seed: u64,
+    },
+    Key {
+        key_ycbcr: [f32; 3],
+        tolerance: f32,
+        softness: f32,
+        spill: f32,
+        dominant: u32,
+        output: u32,
+    },
+    FourColorGradient {
+        colors: [[f32; 3]; 4],
+        opacity: f32,
+        blend_exp: f32,
+    },
+    Ramp {
+        start: [f32; 2],
+        end: [f32; 2],
+        start_color: [f32; 3],
+        end_color: [f32; 3],
+        radial: bool,
+        blend: f32,
+    },
+    Circle {
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        color: [f32; 3],
+        opacity: f32,
+    },
+    Grid {
+        size: f32,
+        border: f32,
+        color: [f32; 3],
+        opacity: f32,
+    },
+    LensFlare {
+        cx: f32,
+        cy: f32,
+        brightness: f32,
+        blend: f32,
+    },
+    Twirl {
+        cx: f32,
+        cy: f32,
+        angle: f32,
+        radius: f32,
+    },
+    WaveWarp {
+        height: f32,
+        width: f32,
+        ux: f32,
+        uy: f32,
+        phase: f32,
+    },
+    LensDistortion {
+        curvature: f32,
+        cx: f32,
+        cy: f32,
+        norm: f32,
+    },
+    Basic3D {
+        swivel: f32,
+        tilt: f32,
+        distance: f32,
+    },
+    BevelAlpha {
+        thickness: f32,
+        lx: f32,
+        ly: f32,
+        intensity: f32,
+    },
+    DropShadow {
+        dx: f32,
+        dy: f32,
+        color: [f32; 3],
+        opacity: f32,
+        only: bool,
+        rx: Vec<u32>,
+        ry: Vec<u32>,
     },
     /// Three box passes per axis approximating a Gaussian (radii per pass; empty: axis untouched).
     Gaussian {
@@ -214,6 +333,27 @@ pub const GPU_EFFECTS: &[&str] = &[
     "extract",
     "invert",
     "posterize",
+    "median",
+    "mosaic",
+    "find_edges",
+    "emboss",
+    "replicate",
+    "strobe",
+    "noise",
+    "color_key",
+    "ultra_key",
+    "luma_key",
+    "four_color_gradient",
+    "ramp",
+    "circle",
+    "grid",
+    "lens_flare",
+    "twirl",
+    "wave_warp",
+    "lens_distortion",
+    "basic_3d",
+    "bevel_alpha",
+    "drop_shadow",
     "gaussian_blur",
     "gaussian_blur_legacy",
     "camera_blur",
@@ -333,6 +473,176 @@ impl FxOp {
             }
             "invert" => FxOp::Invert { channel: choice(e, "channel"), blend: f(e, "blend", cx) / 100.0 },
             "posterize" => FxOp::Posterize { n: f(e, "levels", cx).max(2.0) - 1.0 },
+            "median" => {
+                let scale = if cx.px_scale.is_finite() { cx.px_scale.max(0.0) } else { 1.0 };
+                let radius = f(e, "radius", cx) * scale;
+                let cap = (100.0 * scale).min(w.max(h).max(1) as f32);
+                let radius = if radius.is_finite() && radius > 0.0 { radius.round().clamp(0.0, cap) as u32 } else { 0 };
+                FxOp::Median { radius }
+            }
+            "mosaic" => FxOp::Mosaic {
+                bx: f(e, "horizontal", cx).max(1.0) as u32,
+                by: f(e, "vertical", cx).max(1.0) as u32,
+            },
+            "find_edges" => FxOp::FindEdges { invert: b(e, "invert"), blend: f(e, "blend", cx) / 100.0 },
+            "emboss" => {
+                let dir = (f(e, "direction", cx) as f64).to_radians();
+                let relief = f(e, "relief", cx) * cx.px_scale.max(0.25);
+                FxOp::Emboss {
+                    dx: (dir.cos() as f32) * relief,
+                    dy: (-dir.sin() as f32) * relief,
+                    contrast: f(e, "contrast", cx) / 100.0,
+                    blend: f(e, "blend", cx) / 100.0,
+                }
+            }
+            "replicate" => FxOp::Replicate { n: f(e, "count", cx).clamp(1.0, 16.0) as u32 },
+            "strobe" => {
+                let period = f(e, "period", cx).max(0.001) as f64;
+                let duration = f(e, "duration", cx) as f64;
+                let c = color(e, "color", cx);
+                FxOp::Strobe {
+                    color: [c[0], c[1], c[2]],
+                    blend: f(e, "blend", cx) / 100.0,
+                    active: cx.seconds % period < duration,
+                }
+            }
+            "luma_key" => FxOp::LumaKey { threshold: f(e, "threshold", cx) / 100.0, cutoff: f(e, "cutoff", cx) / 100.0 },
+            "noise" => FxOp::Noise {
+                amount: f(e, "amount", cx) / 100.0,
+                colored: b(e, "color"),
+                clip: b(e, "clip"),
+                seed: crate::effects::noise_frame_seed(cx),
+            },
+            "color_key" | "ultra_key" => {
+                let ultra = e.effect == "ultra_key";
+                let kc = if ultra { color(e, "key_color", cx) } else { color(e, "color", cx) };
+                let key_ycbcr = filmcraft_color::rgb_to_ycbcr(kc[0], kc[1], kc[2], filmcraft_color::Matrix::Bt709);
+                let (tolerance, softness, spill, output) = if ultra {
+                    (
+                        0.05 + f(e, "tolerance", cx) / 100.0 * 0.25 + f(e, "transparency", cx) / 100.0 * 0.05,
+                        0.05 + f(e, "soften", cx) / 100.0 * 0.2 + f(e, "pedestal", cx) / 100.0 * 0.05,
+                        f(e, "spill", cx) / 100.0,
+                        choice(e, "output"),
+                    )
+                } else {
+                    (f(e, "tolerance", cx) / 255.0 * 0.6 + 0.01, f(e, "feather", cx) / 50.0 * 0.2 + 0.01, 0.0, 0)
+                };
+                let dominant = if kc[1] >= kc[0] && kc[1] >= kc[2] { 1 } else if kc[2] >= kc[0] { 2 } else { 0 };
+                FxOp::Key { key_ycbcr, tolerance, softness, spill, dominant, output }
+            }
+            "four_color_gradient" => {
+                let cols = [color(e, "c1", cx), color(e, "c2", cx), color(e, "c3", cx), color(e, "c4", cx)];
+                FxOp::FourColorGradient {
+                    colors: cols.map(|c| [c[0], c[1], c[2]]),
+                    opacity: f(e, "opacity", cx) / 100.0,
+                    blend_exp: 1.0 + f(e, "blend", cx) / 100.0,
+                }
+            }
+            "ramp" => {
+                let image = Image { w, h, px: Vec::new() };
+                let start = point(e, "start", cx, &image);
+                let end = point(e, "end", cx, &image);
+                let sc = color(e, "start_color", cx);
+                let ec = color(e, "end_color", cx);
+                FxOp::Ramp {
+                    start: [start.x as f32, start.y as f32],
+                    end: [end.x as f32, end.y as f32],
+                    start_color: [sc[0], sc[1], sc[2]],
+                    end_color: [ec[0], ec[1], ec[2]],
+                    radial: choice(e, "shape") == 1,
+                    blend: f(e, "blend", cx) / 100.0,
+                }
+            }
+            "circle" => {
+                let image = Image { w, h, px: Vec::new() };
+                let c = point(e, "center", cx, &image);
+                let col = color(e, "color", cx);
+                FxOp::Circle {
+                    cx: c.x as f32,
+                    cy: c.y as f32,
+                    radius: f(e, "radius", cx) * cx.px_scale,
+                    color: [col[0], col[1], col[2]],
+                    opacity: f(e, "opacity", cx) / 100.0,
+                }
+            }
+            "grid" => {
+                let col = color(e, "color", cx);
+                FxOp::Grid {
+                    size: (f(e, "size", cx) * cx.px_scale).max(1.0),
+                    border: f(e, "border", cx) * cx.px_scale,
+                    color: [col[0], col[1], col[2]],
+                    opacity: f(e, "opacity", cx) / 100.0,
+                }
+            }
+            "lens_flare" => {
+                let image = Image { w, h, px: Vec::new() };
+                let c = point(e, "center", cx, &image);
+                FxOp::LensFlare {
+                    cx: c.x as f32,
+                    cy: c.y as f32,
+                    brightness: f(e, "brightness", cx) / 100.0,
+                    blend: f(e, "blend", cx) / 100.0,
+                }
+            }
+            "twirl" => {
+                let image = Image { w, h, px: Vec::new() };
+                let c = point(e, "center", cx, &image);
+                FxOp::Twirl {
+                    cx: c.x as f32,
+                    cy: c.y as f32,
+                    angle: (f(e, "angle", cx) as f64).to_radians() as f32,
+                    radius: f(e, "radius", cx) / 100.0 * w.min(h) as f32,
+                }
+            }
+            "wave_warp" => {
+                let height = f(e, "height", cx) * cx.px_scale;
+                let width = (f(e, "width", cx) * cx.px_scale).max(1.0);
+                let dir = (f(e, "direction", cx) as f64).to_radians();
+                let phase = cx.seconds * f(e, "speed", cx) as f64 * std::f64::consts::TAU;
+                FxOp::WaveWarp {
+                    height,
+                    width,
+                    ux: dir.sin() as f32,
+                    uy: -(dir.cos() as f32),
+                    phase: phase as f32,
+                }
+            }
+            "lens_distortion" => {
+                let image = Image { w, h, px: Vec::new() };
+                let curvature = f(e, "curvature", cx) / 100.0;
+                let center_x = w as f32 / 2.0 + f(e, "h_decentering", cx) / 100.0 * w as f32 / 2.0;
+                let center_y = h as f32 / 2.0 + f(e, "v_decentering", cx) / 100.0 * h as f32 / 2.0;
+                let norm = ((w as f32 / 2.0).hypot(h as f32 / 2.0)).max(1e-6);
+                let _ = image;
+                FxOp::LensDistortion { curvature, cx: center_x, cy: center_y, norm }
+            }
+            "basic_3d" => FxOp::Basic3D {
+                swivel: (f(e, "swivel", cx) as f64).to_radians() as f32,
+                tilt: (f(e, "tilt", cx) as f64).to_radians() as f32,
+                distance: f(e, "distance", cx) * cx.px_scale,
+            },
+            "bevel_alpha" => {
+                let th = f(e, "thickness", cx) * cx.px_scale;
+                let ang = (f(e, "angle", cx) as f64).to_radians();
+                FxOp::BevelAlpha { thickness: th, lx: ang.cos() as f32, ly: -(ang.sin() as f32), intensity: f(e, "intensity", cx) / 100.0 }
+            }
+            "drop_shadow" => {
+                let col = color(e, "color", cx);
+                let opacity = f(e, "opacity", cx) / 100.0;
+                let dir = (f(e, "direction", cx) as f64).to_radians();
+                let dist = f(e, "distance", cx) as f64 * cx.px_scale as f64;
+                let soft = f(e, "softness", cx) * cx.px_scale * 0.5;
+                let (rx, ry) = crate::effects::gaussian_boxes(w, h, soft, soft);
+                FxOp::DropShadow {
+                    dx: (dir.sin() * dist) as f32,
+                    dy: (-dir.cos() * dist) as f32,
+                    color: [col[0], col[1], col[2]],
+                    opacity,
+                    only: b(e, "only"),
+                    rx,
+                    ry,
+                }
+            }
             "gaussian_blur" | "gaussian_blur_legacy" => {
                 let r = f(e, "blurriness", cx) * cx.px_scale * 0.5;
                 let dims = choice(e, "dimensions");
@@ -603,6 +913,27 @@ impl FxOp {
             FxOp::Extract { lo, hi, soft, .. } => fin(&[*lo, *hi, *soft]),
             FxOp::Invert { blend, .. } => blend.is_finite(),
             FxOp::Posterize { n } => n.is_finite(),
+            FxOp::Median { radius } => *radius <= 1,
+            FxOp::Mosaic { .. } | FxOp::Replicate { .. } => true,
+            FxOp::FindEdges { blend, .. } => blend.is_finite(),
+            FxOp::Emboss { dx, dy, contrast, blend } => fin(&[*dx, *dy, *contrast, *blend]),
+            FxOp::Strobe { color, blend, .. } => fin(color) && blend.is_finite(),
+            FxOp::LumaKey { threshold, cutoff } => fin(&[*threshold, *cutoff]),
+            FxOp::Noise { amount, .. } => amount.is_finite(),
+            FxOp::Key { key_ycbcr, tolerance, softness, spill, dominant, output } =>
+                fin(key_ycbcr) && fin(&[*tolerance, *softness, *spill]) && *dominant <= 2 && *output <= 2,
+            FxOp::FourColorGradient { colors, opacity, blend_exp } => colors.iter().all(|c| fin(c)) && fin(&[*opacity, *blend_exp]),
+            FxOp::Ramp { start, end, start_color, end_color, blend, .. } =>
+                fin(start) && fin(end) && fin(start_color) && fin(end_color) && blend.is_finite(),
+            FxOp::Circle { cx, cy, radius, color, opacity } => fin(&[*cx, *cy, *radius, *opacity]) && fin(color),
+            FxOp::Grid { size, border, color, opacity } => fin(&[*size, *border, *opacity]) && fin(color),
+            FxOp::LensFlare { cx, cy, brightness, blend } => fin(&[*cx, *cy, *brightness, *blend]),
+            FxOp::Twirl { cx, cy, angle, radius } => fin(&[*cx, *cy, *angle, *radius]),
+            FxOp::WaveWarp { height, width, ux, uy, phase } => fin(&[*height, *width, *ux, *uy, *phase]) && *width >= 1.0,
+            FxOp::LensDistortion { curvature, cx, cy, norm } => fin(&[*curvature, *cx, *cy, *norm]) && *norm > 0.0,
+            FxOp::Basic3D { swivel, tilt, distance } => fin(&[*swivel, *tilt, *distance]),
+            FxOp::BevelAlpha { thickness, lx, ly, intensity } => fin(&[*thickness, *lx, *ly, *intensity]),
+            FxOp::DropShadow { dx, dy, color, opacity, .. } => fin(&[*dx, *dy, *opacity]) && fin(color),
             FxOp::Gaussian { .. } => true,
             FxOp::DirectionalBlur { dx, dy, .. } => fin(&[*dx, *dy]),
             FxOp::Unsharp { amount, threshold, .. } => fin(&[*amount, *threshold]),
@@ -775,6 +1106,333 @@ impl FxOp {
             FxOp::Posterize { n } => {
                 let n = *n;
                 img.map_rgb(|c, _, _| dec(enc(c).map(|v| (v * n).round() / n)));
+            }
+            FxOp::Median { radius } => crate::effects::median(img, *radius as isize),
+            FxOp::Mosaic { bx, by } => crate::effects::mosaic(img, (*bx).max(1) as usize, (*by).max(1) as usize),
+            FxOp::FindEdges { invert, blend } => {
+                let (invert, blend) = (*invert, *blend);
+                let src = img.clone();
+                let w = img.w;
+                img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+                    for x in 0..w {
+                        let l = |dx: isize, dy: isize| {
+                            let p = src.get_clamped(x as isize + dx, y as isize + dy);
+                            luma709(p[0], p[1], p[2])
+                        };
+                        let gx = l(1, -1) + 2.0 * l(1, 0) + l(1, 1) - l(-1, -1) - 2.0 * l(-1, 0) - l(-1, 1);
+                        let gy = l(-1, 1) + 2.0 * l(0, 1) + l(1, 1) - l(-1, -1) - 2.0 * l(0, -1) - l(1, -1);
+                        let mut m = (gx * gx + gy * gy).sqrt().min(1.0);
+                        if !invert {
+                            m = 1.0 - m;
+                        }
+                        let p = src.get(x, y);
+                        let a = p[3];
+                        for k in 0..3 {
+                            row[x * 4 + k] = m * a * (1.0 - blend) + p[k] * blend;
+                        }
+                    }
+                });
+            }
+            FxOp::Emboss { dx, dy, contrast, blend } => {
+                let (dx, dy, contrast, blend) = (*dx, *dy, *contrast, *blend);
+                let src = img.clone();
+                let w = img.w;
+                img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+                    for x in 0..w {
+                        let a = src.sample_bilinear_clamped(x as f32 + 0.5 + dx, y as f32 + 0.5 + dy);
+                        let b = src.sample_bilinear_clamped(x as f32 + 0.5 - dx, y as f32 + 0.5 - dy);
+                        let v = srgb_to_linear((0.5 + (luma709(a[0], a[1], a[2]) - luma709(b[0], b[1], b[2])) * contrast * 2.0).clamp(0.0, 1.0));
+                        let p = src.get(x, y);
+                        for k in 0..3 {
+                            row[x * 4 + k] = v * p[3] * (1.0 - blend) + p[k] * blend;
+                        }
+                    }
+                });
+            }
+            FxOp::Replicate { n } => {
+                let n = (*n as usize).clamp(1, 16);
+                let src = img.clone();
+                let (w, h) = (img.w, img.h);
+                img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+                    for x in 0..w {
+                        let u = (x * n) % w;
+                        let v = (y * n) % h;
+                        let sx = u as f32 + 0.5 + (n as f32 - 1.0) * 0.5 / n as f32;
+                        let sy = v as f32 + 0.5;
+                        let p = src.sample_bilinear_clamped(sx, sy);
+                        row[x * 4..x * 4 + 4].copy_from_slice(&p);
+                    }
+                });
+            }
+            FxOp::Strobe { color, blend, active } => {
+                if *active {
+                    let lc = dec(*color);
+                    let blend = *blend;
+                    img.map_rgb(|o, _, _| [lc[0] + (o[0] - lc[0]) * blend, lc[1] + (o[1] - lc[1]) * blend, lc[2] + (o[2] - lc[2]) * blend]);
+                }
+            }
+            FxOp::LumaKey { threshold, cutoff } => {
+                let (th, cut) = (*threshold, *cutoff);
+                img.px.par_chunks_mut(4).for_each(|p| {
+                    if p[3] <= 0.0 {
+                        return;
+                    }
+                    let l = linear_to_srgb(luma709(p[0] / p[3], p[1] / p[3], p[2] / p[3]).max(0.0));
+                    let a = if l <= cut {
+                        0.0
+                    } else if l >= th.max(cut + 1e-3) {
+                        1.0
+                    } else {
+                        (l - cut) / (th - cut).max(1e-3)
+                    };
+                    for v in p.iter_mut() {
+                        *v *= a;
+                    }
+                });
+            }
+            FxOp::Noise { amount, colored, clip, seed } => {
+                let (amt, colored, clip, seed) = (*amount, *colored, *clip, *seed);
+                let w = img.w;
+                img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+                    for x in 0..w {
+                        let p = &mut row[x * 4..x * 4 + 4];
+                        let a = p[3];
+                        if a <= 0.0 {
+                            continue;
+                        }
+                        let n0 = crate::effects::hash3(x, y, seed) - 0.5;
+                        let ns = if colored {
+                            [
+                                n0,
+                                crate::effects::hash3(x, y, seed.wrapping_add(7777)) - 0.5,
+                                crate::effects::hash3(x, y, seed.wrapping_add(99_991)) - 0.5,
+                            ]
+                        } else {
+                            [n0; 3]
+                        };
+                        let c = enc([p[0] / a, p[1] / a, p[2] / a]);
+                        let mut out = [c[0] + ns[0] * amt, c[1] + ns[1] * amt, c[2] + ns[2] * amt];
+                        if clip {
+                            out = out.map(|v| v.clamp(0.0, 1.0));
+                        }
+                        let out = dec(out);
+                        p[0] = out[0] * a;
+                        p[1] = out[1] * a;
+                        p[2] = out[2] * a;
+                    }
+                });
+            }
+            FxOp::Key { key_ycbcr, tolerance, softness, spill, dominant, output } => {
+                let (kycc, tol, soft, spill, dom, output) = (*key_ycbcr, *tolerance, *softness, *spill, *dominant as usize, *output);
+                img.px.par_chunks_mut(4).for_each(|p| {
+                    if p[3] <= 0.0 {
+                        return;
+                    }
+                    let c = enc([p[0] / p[3], p[1] / p[3], p[2] / p[3]]);
+                    let ycc = filmcraft_color::rgb_to_ycbcr(c[0], c[1], c[2], filmcraft_color::Matrix::Bt709);
+                    let d = ((ycc[1] - kycc[1]).powi(2) + (ycc[2] - kycc[2]).powi(2)).sqrt() + (ycc[0] - kycc[0]).abs() * 0.15;
+                    let alpha = ((d - tol) / soft).clamp(0.0, 1.0);
+                    let mut color = c;
+                    if spill > 0.0 {
+                        let others = (color[(dom + 1) % 3] + color[(dom + 2) % 3]) / 2.0;
+                        if color[dom] > others {
+                            color[dom] -= (color[dom] - others) * spill;
+                        }
+                    }
+                    if output == 1 {
+                        p.copy_from_slice(&[alpha * p[3], alpha * p[3], alpha * p[3], p[3]]);
+                    } else {
+                        let a = p[3] * alpha;
+                        let lo = dec(color);
+                        p.copy_from_slice(&[lo[0] * a, lo[1] * a, lo[2] * a, a]);
+                    }
+                });
+            }
+            FxOp::FourColorGradient { colors, opacity, blend_exp } => {
+                let (w, h) = (img.w as f32, img.h as f32);
+                let pts = [(0.25 * w, 0.25 * h), (0.75 * w, 0.25 * h), (0.25 * w, 0.75 * h), (0.75 * w, 0.75 * h)];
+                let cs = *colors;
+                let (op, exp) = (*opacity, *blend_exp);
+                crate::effects::fill_over(img, op, |x, y| {
+                    let mut acc = [0.0f32; 3];
+                    let mut wsum = 0.0;
+                    for (i, p) in pts.iter().enumerate() {
+                        let d = ((x - p.0).powi(2) + (y - p.1).powi(2)).sqrt().max(1.0);
+                        let weight = 1.0 / d.powf(exp);
+                        for k in 0..3 {
+                            acc[k] += cs[i][k] * weight;
+                        }
+                        wsum += weight;
+                    }
+                    dec(acc.map(|v| v / wsum))
+                });
+            }
+            FxOp::Ramp { start, end, start_color, end_color, radial, blend } => {
+                let (sx, sy, ex, ey) = (start[0], start[1], end[0], end[1]);
+                let (sc, ec, radial, blend) = (*start_color, *end_color, *radial, *blend);
+                let (vx, vy) = (ex - sx, ey - sy);
+                let len2 = (vx * vx + vy * vy).max(1e-9);
+                crate::effects::fill_over(img, 1.0 - blend, |x, y| {
+                    let t = (if radial {
+                        ((x - sx).powi(2) + (y - sy).powi(2)).sqrt() / len2.sqrt()
+                    } else {
+                        ((x - sx) * vx + (y - sy) * vy) / len2
+                    }).clamp(0.0, 1.0);
+                    dec([sc[0] + (ec[0] - sc[0]) * t, sc[1] + (ec[1] - sc[1]) * t, sc[2] + (ec[2] - sc[2]) * t])
+                });
+            }
+            FxOp::Circle { cx, cy, radius, color, opacity } => {
+                let (cx, cy, r, op) = (*cx, *cy, *radius, *opacity);
+                let lc = dec(*color);
+                let w = img.w;
+                img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+                    for x in 0..w {
+                        let d = ((x as f32 + 0.5 - cx).hypot(y as f32 + 0.5 - cy));
+                        let a = (r - d + 0.5).clamp(0.0, 1.0) * op;
+                        if a > 0.0 {
+                            let p = &mut row[x * 4..x * 4 + 4];
+                            for k in 0..3 {
+                                p[k] = lc[k] * a + p[k] * (1.0 - a);
+                            }
+                            p[3] = a + p[3] * (1.0 - a);
+                        }
+                    }
+                });
+            }
+            FxOp::Grid { size, border, color, opacity } => {
+                let (size, border, op) = (*size, *border, *opacity);
+                let lc = dec(*color);
+                let w = img.w;
+                let (ox, oy) = (img.w as f32 / 2.0, img.h as f32 / 2.0);
+                img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+                    for x in 0..w {
+                        let gx = ((x as f32 - ox).rem_euclid(size)).min(size - (x as f32 - ox).rem_euclid(size));
+                        let gy = ((y as f32 - oy).rem_euclid(size)).min(size - (y as f32 - oy).rem_euclid(size));
+                        let a = ((border * 0.5 - gx.min(gy) + 0.5).clamp(0.0, 1.0)) * op;
+                        if a > 0.0 {
+                            let p = &mut row[x * 4..x * 4 + 4];
+                            for k in 0..3 {
+                                p[k] = lc[k] * a + p[k] * (1.0 - a);
+                            }
+                            p[3] = a + p[3] * (1.0 - a);
+                        }
+                    }
+                });
+            }
+            FxOp::LensFlare { cx, cy, brightness, blend } => {
+                let (cx, cy, br, blend) = (*cx as f64, *cy as f64, *brightness, *blend);
+                let (w, h) = (img.w as f64, img.h as f64);
+                let (mx, my) = (w / 2.0, h / 2.0);
+                let scale = w.max(h);
+                let wi = img.w;
+                img.px.par_chunks_mut(wi * 4).enumerate().for_each(|(y, row)| {
+                    for x in 0..wi {
+                        let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
+                        let d = (px - cx).hypot(py - cy) / scale;
+                        let mut add = [1.0f32, 0.9, 0.7].map(|k| k * (0.35 * (-d * 18.0).exp() + 0.08 * (-d * 3.0).exp()) as f32);
+                        for (t, rad, tint) in [(0.5, 0.05, [0.4f32, 0.6, 1.0]), (1.3, 0.03, [1.0, 0.5, 0.3]), (1.7, 0.08, [0.4, 1.0, 0.5])] {
+                            let gx = cx + (mx - cx) * 2.0 * t / 2.0 * 2.0;
+                            let gy = cy + (my - cy) * 2.0 * t / 2.0 * 2.0;
+                            let dd = (px - gx).hypot(py - gy) / scale;
+                            let ring = (1.0 - ((dd - rad) / 0.01).abs()).max(0.0) as f32 * 0.15 + if dd < rad { 0.06 } else { 0.0 };
+                            for k in 0..3 {
+                                add[k] += tint[k] * ring;
+                            }
+                        }
+                        let p = &mut row[x * 4..x * 4 + 4];
+                        for k in 0..3 {
+                            p[k] += add[k] * br * (1.0 - blend) * p[3].max(0.0);
+                        }
+                    }
+                });
+            }
+            FxOp::Twirl { cx, cy, angle, radius } => {
+                let (cx, cy, angle, radius) = (*cx as f64, *cy as f64, *angle as f64, *radius as f64);
+                crate::effects::warp(img, |x, y| {
+                    let (dx, dy) = (x - cx, y - cy);
+                    let d = (dx * dx + dy * dy).sqrt();
+                    if d >= radius {
+                        return (x, y);
+                    }
+                    let k = 1.0 - d / radius;
+                    let a = angle * k * k;
+                    let (sn, co) = a.sin_cos();
+                    (cx + dx * co - dy * sn, cy + dx * sn + dy * co)
+                });
+            }
+            FxOp::WaveWarp { height, width, ux, uy, phase } => {
+                let (height, width, ux, uy, phase) = (*height as f64, *width as f64, *ux as f64, *uy as f64, *phase as f64);
+                crate::effects::warp(img, |x, y| {
+                    let along = x * ux + y * uy;
+                    let off = height * (along / width * std::f64::consts::TAU - phase).sin();
+                    (x - uy * off, y + ux * off)
+                });
+            }
+            FxOp::LensDistortion { curvature, cx, cy, norm } => {
+                let (k, cx, cy, norm) = (*curvature as f64, *cx as f64, *cy as f64, *norm as f64);
+                crate::effects::warp(img, |x, y| {
+                    let (dx, dy) = ((x - cx) / norm, (y - cy) / norm);
+                    let r2 = dx * dx + dy * dy;
+                    let scale = 1.0 - k * r2;
+                    (cx + dx * scale * norm, cy + dy * scale * norm)
+                });
+            }
+            FxOp::Basic3D { swivel, tilt, distance } => {
+                let (sw, tl, dist) = (*swivel as f64, *tilt as f64, *distance as f64);
+                let (w, h) = (img.w as f64, img.h as f64);
+                let focal = w.max(h) * 1.2;
+                crate::effects::warp_opt(img, |x, y| {
+                    let (px, py) = (x - w / 2.0, y - h / 2.0);
+                    let (ss, cs) = sw.sin_cos();
+                    let (st, ct) = tl.sin_cos();
+                    let n = [ss * ct, -st, cs * ct];
+                    let u = [cs, 0.0, -ss];
+                    let v = [ss * st, ct, cs * st];
+                    let z0 = focal + dist * 10.0;
+                    let dir = [px, py, focal];
+                    let denom = n[0] * dir[0] + n[1] * dir[1] + n[2] * dir[2];
+                    if denom.abs() < 1e-9 { return None; }
+                    let tt = (n[2] * z0) / denom;
+                    if tt <= 0.0 { return None; }
+                    let hit = [dir[0] * tt, dir[1] * tt, dir[2] * tt - z0];
+                    let su = hit[0] * u[0] + hit[1] * u[1] + hit[2] * u[2];
+                    let sv = hit[0] * v[0] + hit[1] * v[1] + hit[2] * v[2];
+                    Some((su + w / 2.0, sv + h / 2.0))
+                });
+            }
+            FxOp::BevelAlpha { thickness, lx, ly, intensity } => {
+                let (th, lx, ly, inten) = (*thickness, *lx, *ly, *intensity);
+                let src = img.clone();
+                let w = img.w;
+                img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+                    for x in 0..w {
+                        let a = |dx: f32, dy: f32| src.sample_bilinear_clamped(x as f32 + 0.5 + dx, y as f32 + 0.5 + dy)[3];
+                        let gx = a(th, 0.0) - a(-th, 0.0);
+                        let gy = a(0.0, th) - a(0.0, -th);
+                        let shade = -(gx * lx + gy * ly) * inten;
+                        let p = &mut row[x * 4..x * 4 + 4];
+                        for k in 0..3 {
+                            p[k] = (p[k] + shade * p[3]).clamp(0.0, p[3]);
+                        }
+                    }
+                });
+            }
+            FxOp::DropShadow { dx, dy, color, opacity, only, rx, ry } => {
+                let lc = dec(*color);
+                let matrix = filmcraft_geom::Affine::translate(*dx as f64, *dy as f64);
+                let mut sh = img.transformed(img.w, img.h, &matrix);
+                sh.px.par_chunks_mut(4).for_each(|p| {
+                    let a = p[3] * *opacity;
+                    p[0] = lc[0] * a;
+                    p[1] = lc[1] * a;
+                    p[2] = lc[2] * a;
+                    p[3] = a;
+                });
+                crate::effects::box_blur(&mut sh, rx, ry, false);
+                if !*only {
+                    crate::blend::composite(&mut sh, img, 1.0, crate::blend::Blend::Normal);
+                }
+                *img = sh;
             }
             FxOp::Gaussian { rx, ry, repeat } => crate::effects::box_blur(img, rx, ry, *repeat),
             FxOp::DirectionalBlur { dx, dy, steps } => crate::effects::directional_taps(img, *dx, *dy, *steps as usize),
