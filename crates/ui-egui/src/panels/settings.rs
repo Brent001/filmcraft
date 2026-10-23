@@ -765,7 +765,7 @@ fn custom(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, name: &str
                     ui,
                     &t,
                     &format!(
-                        "Last compositor submit: {:.2} ms · output: {}×{} · maximum texture side: {}",
+                        "Last compositor call: {:.2} ms · output: {}×{} · maximum texture side: {}",
                         g.last_ms, g.size.0, g.size.1, g.max_texture
                     ),
                 );
@@ -792,10 +792,22 @@ fn custom(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, name: &str
             } else {
                 note(ui, &t, "GPU compositor is not active in this session; previews use CPU compositing or GPU initialization has not completed.");
             }
+            let export_timing = filmcraft_gpu::export_renderer::timing::get();
             note(
                 ui,
                 &t,
-                "GPU utilization percentages and driver memory residency are not exposed consistently across platforms by wgpu; the values above are compositor timing, cache and fallback telemetry.",
+                &format!(
+                    "GPU export totals: {} frame(s) · submit {:.1} ms · device/map wait {:.1} ms · pixel conversion {:.1} ms",
+                    export_timing.frames,
+                    export_timing.submit.as_secs_f64() * 1000.0,
+                    export_timing.map_wait.as_secs_f64() * 1000.0,
+                    export_timing.convert.as_secs_f64() * 1000.0
+                ),
+            );
+            note(
+                ui,
+                &t,
+                "GPU utilization percentages and driver memory residency are not exposed consistently across platforms by wgpu; the values above are compositor timing, cache, export and fallback telemetry.",
             );
         }
         "controlInfo" => {
