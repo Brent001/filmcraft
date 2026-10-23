@@ -28,6 +28,8 @@ pub enum Target {
     Item(ItemId),
     /// A GPU frame plan of a sequence (decoded layers + transforms), composited on the GPU.
     SequencePlan(ItemId),
+    /// A Source-monitor frame as a GPU plan (or a CPU-rendered plan when colour management needs it).
+    ItemPlan(ItemId),
     /// The Multi-Camera view's angle grid of a multi-camera source at its time: one page (grid
     /// side, 0 = automatic; page) of the shown angles, each at the job's scale.
     MulticamGrid(ItemId, u8, u16),
@@ -497,7 +499,7 @@ impl FrameServer {
     /// Whether the exact frame (image or plan) is ready.
     pub fn is_ready(&self, k: &FrameKey) -> bool {
         match k.target {
-            Target::SequencePlan(_) => self.shared.plans.lock().unwrap_or_else(|e| e.into_inner()).map.contains_key(k),
+            Target::SequencePlan(_) | Target::ItemPlan(_) => self.shared.plans.lock().unwrap_or_else(|e| e.into_inner()).map.contains_key(k),
             _ => self.shared.done.lock().unwrap_or_else(|e| e.into_inner()).map.contains_key(k),
         }
     }
@@ -828,22 +830,34 @@ fn run_job(sh: &Shared, job: &Job, pool: &Arc<MediaPool>, services: &Arc<dyn Ser
         filmcraft_media::cancel::with_catch_up(job.catch_up, || {
             filmcraft_media::cancel::with_draft(job.key.draft, || {
                 filmcraft_media::cancel::with_background(is_background(job), || {
-                    if let Target::SequencePlan(seq) = job.key.target {
-                        let (plan, pv) = plan_job(job, seq, pool, services, previews);
-                        loading = filmcraft_media::pending::take();
-                        if !job.cancel.load(Ordering::Relaxed) && !loading {
-                            // Convert texels for upload here, not on the UI thread when the frame is shown.
-                            let prepared = filmcraft_gpu::prepare(&plan);
-                            sh.plans.lock().unwrap_or_else(|e| e.into_inner()).insert(job.key, GpuPlan { plan, prepared });
+                    match job.key.target {
+                        Target::SequencePlan(seq) => {
+                            let (plan, pv) = plan_job(job, seq, pool, services, previews);
+                            loading = filmcraft_media::pending::take();
+                            if !job.cancel.load(Ordering::Relaxed) && !loading {
+                                // Convert texels for upload here, not on the UI thread when the frame is shown.
+                                let prepared = filmcraft_gpu::prepare(&plan);
+                                sh.plans.lock().unwrap_or_else(|e| e.into_inner()).insert(job.key, GpuPlan { plan, prepared });
+                            }
+                            pv
                         }
-                        pv
-                    } else {
-                        let (img, pv) = render_job(job, pool, services, previews);
-                        loading = filmcraft_media::pending::take();
-                        if !job.cancel.load(Ordering::Relaxed) && !loading {
-                            sh.done.lock().unwrap_or_else(|e| e.into_inner()).insert(job.key, Arc::new(img));
+                        Target::ItemPlan(item) => {
+                            let (plan, pv) = plan_source_job(job, item, pool, services);
+                            loading = filmcraft_media::pending::take();
+                            if !job.cancel.load(Ordering::Relaxed) && !loading {
+                                let prepared = filmcraft_gpu::prepare(&plan);
+                                sh.plans.lock().unwrap_or_else(|e| e.into_inner()).insert(job.key, GpuPlan { plan, prepared });
+                            }
+                            pv
                         }
-                        pv
+                        _ => {
+                            let (img, pv) = render_job(job, pool, services, previews);
+                            loading = filmcraft_media::pending::take();
+                            if !job.cancel.load(Ordering::Relaxed) && !loading {
+                                sh.done.lock().unwrap_or_else(|e| e.into_inner()).insert(job.key, Arc::new(img));
+                            }
+                            pv
+                        }
                     }
                 })
             })
@@ -907,6 +921,18 @@ fn provider(job: &Job, pool: &Arc<MediaPool>, services: &Arc<dyn Services>) -> J
     JobProvider { inner: pool.provider(job.project.clone(), services.clone()) }
 }
 
+/// Source-monitor planning: let the GPU decode/scale and present supported source formats, but
+/// preserve render_item() as the exact fallback for colour transforms the compositor does not cover.
+fn plan_source_job(job: &Job, item: ItemId, pool: &Arc<MediaPool>, services: &Arc<dyn Services>) -> (filmcraft_render::plan::FramePlan, bool) {
+    let provider = provider(job, pool, services);
+    if let Some(plan) = filmcraft_render::plan::plan_source_item(&job.project, item, job.time, job.scale, &provider) {
+        return (plan, false);
+    }
+    let img = filmcraft_render::render_item(&job.project, item, job.time, job.scale, &provider)
+        .unwrap_or_else(|| filmcraft_render::Image::new(1, 1));
+    (filmcraft_render::plan::FramePlan::Image(img), false)
+}
+
 fn plan_job(job: &Job, seq: ItemId, pool: &Arc<MediaPool>, services: &Arc<dyn Services>, previews: &PreviewStore) -> (filmcraft_render::plan::FramePlan, bool) {
     let opts = filmcraft_render::RenderOptions { scale: job.scale, captions: true, ..Default::default() };
     if let Some(frame) = preview_frame(job, seq, pool, previews)
@@ -958,6 +984,7 @@ fn render_job(job: &Job, pool: &Arc<MediaPool>, services: &Arc<dyn Services>, pr
     let img = match job.key.target {
         Target::Sequence(seq) | Target::SequencePlan(seq) => Some(filmcraft_render::render_sequence(&job.project, seq, job.time, opts, &provider)),
         Target::Item(item) => filmcraft_render::render_item(&job.project, item, job.time, job.scale, &provider),
+        Target::ItemPlan(item) => filmcraft_render::render_item(&job.project, item, job.time, job.scale, &provider),
         Target::MulticamGrid(item, side, page) => {
             let side = (side > 0).then_some(side as usize);
             filmcraft_render::multicam::render_grid_page(&job.project, item, job.time, job.scale, side, page as usize, &provider).map(|(img, _)| img)
