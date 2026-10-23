@@ -8,6 +8,7 @@
 //! the chain ahead of its output.
 
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::sync::{Mutex, OnceLock};
 
 use filmcraft_audio_dsp::AudioEffect;
@@ -15,6 +16,7 @@ use filmcraft_project::{EffectInstance, TrackItem};
 use filmcraft_time::Tick;
 
 /// How a project effect maps onto a DSP effect.
+#[derive(Clone, Copy)]
 pub(crate) struct Mapping {
     pub(crate) dsp: &'static str,
     /// Pre-roll (seconds) for a fresh chain; closures get the effect instance at the start time.
@@ -317,6 +319,20 @@ fn cache() -> &'static Mutex<HashMap<Key, Vec<Chain>>> {
     C.get_or_init(Default::default)
 }
 
+/// Bound memory usage by evicting cold entries individually, preserving the entry that was just
+/// populated. A global clear causes synchronized chain reconstruction and long effect pre-rolls.
+fn evict_effect_cache_entries<K, V>(cache: &mut HashMap<K, V>, keep: &K, limit: usize)
+where
+    K: Copy + Eq + Hash,
+{
+    while cache.len() > limit {
+        let Some(candidate) = cache.keys().copied().find(|key| key != keep) else {
+            break;
+        };
+        cache.remove(&candidate);
+    }
+}
+
 fn structure_hash(item: &TrackItem) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -331,10 +347,19 @@ const BLOCK: usize = 256;
 
 /// Run `input` (planar, `input[c].len()` samples starting at timeline sample `in0`) through the
 /// chain, setting keyframed parameters per block.
-fn run(chain: &mut Chain, item: &TrackItem, in0: i64, input: &mut [Vec<f32>], sr: u32) {
-    let act = active(item);
-    let n = input[0].len();
+fn run(
+    chain: &mut Chain,
+    item: &TrackItem,
+    act: &[(&EffectInstance, Mapping)],
+    in0: i64,
+    input: &mut [Vec<f32>],
+    sr: u32,
+) {
+    let n = input.first().map_or(0, Vec::len);
     let mut i = 0;
+    // The channel-slice vector is needed only while an effect is called. Reuse its allocation
+    // across the absolute-grid blocks instead of allocating a new Vec every 256 samples.
+    let mut chans: Vec<&mut [f32]> = Vec::with_capacity(input.len());
     while i < n {
         // absolute block grid: parameters update at the same samples however requests are cut
         let pos = in0 + i as i64;
@@ -343,7 +368,8 @@ fn run(chain: &mut Chain, item: &TrackItem, in0: i64, input: &mut [Vec<f32>], sr
         for ((e, m), d) in act.iter().zip(chain.fx.iter_mut()) {
             (m.apply)(d.as_mut(), e, mt);
         }
-        let mut chans: Vec<&mut [f32]> = input.iter_mut().map(|c| &mut c[i..end]).collect();
+        chans.clear();
+        chans.extend(input.iter_mut().map(|c| &mut c[i..end]));
         for d in chain.fx.iter_mut() {
             d.process(&mut chans);
         }
@@ -356,6 +382,9 @@ fn run(chain: &mut Chain, item: &TrackItem, in0: i64, input: &mut [Vec<f32>], sr
 /// (silence outside the clip).
 pub fn process(item: &TrackItem, a0: i64, n: usize, sr: u32, read: &dyn Fn(i64, usize) -> Vec<Vec<f32>>) -> Vec<Vec<f32>> {
     let width = read(a0, 0).len().max(1);
+    // Resolve enabled effects once for this pull. The list is also the source of the newly
+    // created chain, so recomputing it inside run() would allocate the same Vec a second time.
+    let act = active(item);
     let key = (item.id.0, structure_hash(item), sr, width);
     let taken = {
         let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
@@ -367,7 +396,6 @@ pub fn process(item: &TrackItem, a0: i64, n: usize, sr: u32, read: &dyn Fn(i64, 
             (chain, read(a0 + l, n), 0usize)
         }
         None => {
-            let act = active(item);
             let mt = item.source_time_at(Tick::from_units(a0, sr as i64));
             let pre_s = act.iter().map(|(e, m)| (m.preroll)(e, mt)).fold(0.0, f64::max);
             let pre = (pre_s * sr as f64).ceil() as usize;
@@ -384,7 +412,7 @@ pub fn process(item: &TrackItem, a0: i64, n: usize, sr: u32, read: &dyn Fn(i64, 
         }
     };
     let in0 = chain.next_out + chain.latency as i64;
-    run(&mut chain, item, in0, &mut input, sr);
+    run(&mut chain, item, &act, in0, &mut input, sr);
     chain.next_out = a0 + n as i64;
     let out: Vec<Vec<f32>> = input.iter().map(|c| c[skip..].to_vec()).collect();
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
@@ -393,9 +421,10 @@ pub fn process(item: &TrackItem, a0: i64, n: usize, sr: u32, read: &dyn Fn(i64, 
     if v.len() > 4 {
         v.remove(0);
     }
-    if c.len() > 256 {
-        c.clear();
-    }
+    // Keep the cache bounded without throwing away every live effect chain at once. Clearing the
+    // whole map made the next reads of every active clip recreate processors and replay seconds of
+    // reverb/delay pre-roll together, a particularly bad audio-stutter pattern under cache pressure.
+    evict_effect_cache_entries(&mut c, &key, 256);
     out
 }
 
@@ -404,6 +433,18 @@ mod tests {
     use super::*;
     use filmcraft_audio_dsp::Unit;
     use filmcraft_project::{EffectKind, ParamKind, effect_defs};
+
+    #[test]
+    fn cache_pressure_evicts_entries_without_clearing_the_hot_chain() {
+        let mut cache = (0u16..=256).map(|key| (key, ())).collect::<HashMap<_, _>>();
+        evict_effect_cache_entries(&mut cache, &256, 256);
+        assert_eq!(cache.len(), 256);
+        assert!(cache.contains_key(&256), "the just-used effect chain must survive eviction");
+        assert!(
+            (0u16..256).any(|key| !cache.contains_key(&key)),
+            "cache pressure must evict an individual cold key"
+        );
+    }
 
     #[test]
     fn every_audio_effect_has_dsp() {
