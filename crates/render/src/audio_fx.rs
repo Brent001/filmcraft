@@ -304,7 +304,9 @@ fn active(item: &TrackItem) -> Vec<(&EffectInstance, Mapping)> {
 
 /// Whether the item has audio effects that change its signal.
 pub fn has_effects(item: &TrackItem) -> bool {
-    !active(item).is_empty()
+    item.effects.iter().any(|e| {
+        e.enabled && !e.def().is_some_and(|d| d.intrinsic) && mapping(&e.effect).is_some()
+    })
 }
 
 struct Chain {
@@ -338,9 +340,13 @@ where
 fn structure_hash(item: &TrackItem) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    for (e, m) in active(item) {
-        e.effect.hash(&mut h);
-        m.dsp.hash(&mut h);
+    // Hash directly rather than materializing another temporary Vec from active(item) on every
+    // pull. The processor chain already builds its own active list once for that pull.
+    for e in item.effects.iter().filter(|e| e.enabled && !e.def().is_some_and(|d| d.intrinsic)) {
+        if let Some(m) = mapping(&e.effect) {
+            e.effect.hash(&mut h);
+            m.dsp.hash(&mut h);
+        }
     }
     h.finish()
 }
@@ -384,8 +390,10 @@ fn run(
 /// Process the item's audio for timeline samples `[a0, a0 + n)`. `read(x0, len)` returns the clip's
 /// raw planar audio (2 channels, or 6 on a 5.1 track) for timeline samples `[x0, x0 + len)`
 /// (silence outside the clip).
-pub fn process(item: &TrackItem, a0: i64, n: usize, sr: u32, read: &dyn Fn(i64, usize) -> Vec<Vec<f32>>) -> Vec<Vec<f32>> {
-    let width = read(a0, 0).len().max(1);
+pub fn process(item: &TrackItem, a0: i64, n: usize, sr: u32, width: usize, read: &dyn Fn(i64, usize) -> Vec<Vec<f32>>) -> Vec<Vec<f32>> {
+    // The caller already knows the track width. Avoid a zero-frame read whose only purpose was
+    // discovering channel count (it still walked the source/clip read path and built empty buffers).
+    let width = width.max(1);
     // Resolve enabled effects once for this pull. The list is also the source of the newly
     // created chain, so recomputing it inside run() would allocate the same Vec a second time.
     let act = active(item);
@@ -418,7 +426,15 @@ pub fn process(item: &TrackItem, a0: i64, n: usize, sr: u32, read: &dyn Fn(i64, 
     let in0 = chain.next_out + chain.latency as i64;
     run(&mut chain, item, &act, in0, &mut input, sr);
     chain.next_out = a0 + n as i64;
-    let out: Vec<Vec<f32>> = input.iter().map(|c| c[skip..].to_vec()).collect();
+    // On a cache hit, the input already contains exactly the requested output range; return it
+    // directly rather than allocating/copying a second Vec per channel. On a cache miss, compact
+    // away the pre-roll in the same buffers and truncate them to the requested length.
+    if skip > 0 {
+        for channel in &mut input {
+            channel.copy_within(skip.., 0);
+            channel.truncate(n);
+        }
+    }
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
     let v = c.entry(key).or_default();
     v.push(chain);
@@ -429,7 +445,7 @@ pub fn process(item: &TrackItem, a0: i64, n: usize, sr: u32, read: &dyn Fn(i64, 
     // whole map made the next reads of every active clip recreate processors and replay seconds of
     // reverb/delay pre-roll together, a particularly bad audio-stutter pattern under cache pressure.
     evict_effect_cache_entries(&mut c, &key, 256);
-    out
+    input
 }
 
 #[cfg(test)]
