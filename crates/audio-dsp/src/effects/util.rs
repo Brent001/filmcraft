@@ -41,17 +41,23 @@ impl DelayLine {
     pub(crate) fn read(&self, d: f32) -> f32 {
         let len = self.buf.len();
         let d = d.clamp(0.0, self.max_delay());
-        let di = d.floor();
-        let frac = d - di;
-        let i0 = (self.w + len - 1 - di as usize) % len;
-        let i1 = (i0 + len - 1) % len;
+        let di = d.floor() as usize;
+        let frac = d - di as f32;
+        // `w` points to the next write. Branch-based wrap avoids integer remainder in the
+        // per-sample modulation/reverb hot path; the clamped delay is always < len.
+        let newest = if self.w == 0 { len - 1 } else { self.w - 1 };
+        let i0 = if newest >= di { newest - di } else { len - (di - newest) };
+        let i1 = if i0 == 0 { len - 1 } else { i0 - 1 };
         self.buf[i0] + (self.buf[i1] - self.buf[i0]) * frac
     }
     /// Integer read (`d` samples ago, 0 = newest).
     #[inline]
     pub(crate) fn tap(&self, d: usize) -> f32 {
         let len = self.buf.len();
-        self.buf[(self.w + len - 1 - d.min(len - 1)) % len]
+        let distance = d.min(len - 1);
+        let newest = if self.w == 0 { len - 1 } else { self.w - 1 };
+        let i = if newest >= distance { newest - distance } else { len - (distance - newest) };
+        self.buf[i]
     }
     #[inline]
     pub(crate) fn push(&mut self, x: f32) {
@@ -242,5 +248,39 @@ mod tests {
             e_out += y * y;
         }
         assert!((e_out / e_in - 1.0).abs() < 0.01);
+    }
+}
+
+#[cfg(test)]
+mod delay_line_tests {
+    use super::*;
+
+    fn reference_read(line: &DelayLine, delay: f32) -> f32 {
+        let len = line.buf.len();
+        let d = delay.clamp(0.0, line.max_delay());
+        let di = d.floor();
+        let frac = d - di;
+        let i0 = (line.w + len - 1 - di as usize) % len;
+        let i1 = (i0 + len - 1) % len;
+        line.buf[i0] + (line.buf[i1] - line.buf[i0]) * frac
+    }
+
+    #[test]
+    fn branch_wrapped_delay_reads_match_modulo_reference() {
+        for max in [1, 2, 17, 255, 4096] {
+            let mut line = DelayLine::new(max);
+            for i in 0..line.buf.len() * 3 {
+                line.push((i as f32 * 0.173).sin());
+                for delay in [0.0, 0.25, 1.0, 1.75, max as f32 * 0.5, max as f32, f32::INFINITY] {
+                    assert_eq!(line.read(delay).to_bits(), reference_read(&line, delay).to_bits());
+                    let len = line.buf.len();
+                    for tap in [0, 1, max / 2, max, len + 2] {
+                        let distance = tap.min(len - 1);
+                        let i = (line.w + len - 1 - distance) % len;
+                        assert_eq!(line.tap(tap).to_bits(), line.buf[i].to_bits());
+                    }
+                }
+            }
+        }
     }
 }

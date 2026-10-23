@@ -96,6 +96,8 @@ pub struct ConvolutionReverb {
     pre: DelayLine,
     dry_delay: Vec<DelayLine>,
     key: (usize, f32, f32, f32),
+    /// Defer impulse-spectrum rebuilds until a whole project-parameter update is applied.
+    batching_params: bool,
     mix: Smoothed,
     gain: Smoothed,
     width: Smoothed,
@@ -138,6 +140,7 @@ impl ConvolutionReverb {
             pre: DelayLine::new((0.5 * sample_rate) as usize + 2),
             dry_delay: vec![DelayLine::new(PART + 2); channels.max(1)],
             key: (usize::MAX, 0.0, 0.0, 0.0),
+            batching_params: false,
             mix: Smoothed::with_ms(0.0, sample_rate, 20.0),
             gain: Smoothed::with_ms(1.0, sample_rate, 20.0),
             width: Smoothed::with_ms(1.0, sample_rate, 20.0),
@@ -205,7 +208,12 @@ impl ConvolutionReverb {
     }
 
     fn apply_params(&mut self, snap: bool) {
-        self.rebuild();
+        // An automated effect writes all parameters in one pass. Rebuilding after each write
+        // caused several complete partitioned-FFT rebuilds per 256-sample audio block.
+        // The batch end hook performs a single rebuild after the final values are in place.
+        if !self.batching_params {
+            self.rebuild();
+        }
         self.mix.set(self.pv.v("mix") / 100.0);
         self.gain.set(db_to_gain(self.pv.v("gain")));
         self.width.set(self.pv.v("width") / 100.0);
@@ -273,6 +281,18 @@ impl ConvolutionReverb {
 
 impl AudioEffect for ConvolutionReverb {
     param_plumbing!("convolution_reverb");
+
+    fn begin_parameter_update(&mut self) {
+        self.batching_params = true;
+    }
+
+    fn end_parameter_update(&mut self) {
+        if self.batching_params {
+            self.batching_params = false;
+            self.rebuild();
+        }
+    }
+
     fn latency(&self) -> usize {
         PART
     }
@@ -470,5 +490,26 @@ impl AudioEffect for SurroundReverb {
             }
             start += len;
         }
+    }
+}
+
+#[cfg(test)]
+mod reverb_batch_tests {
+    use super::*;
+
+    #[test]
+    fn convolution_reverb_rebuilds_only_after_a_parameter_batch() {
+        let mut reverb = ConvolutionReverb::new(48_000.0, 2);
+        let old_key = reverb.key;
+        reverb.begin_parameter_update();
+        reverb.set_param("room_size", 55.0);
+        reverb.set_param("damping_lf", 120.0);
+        reverb.set_param("damping_hf", 9000.0);
+        assert_eq!(reverb.key, old_key, "spectrum rebuild must be deferred during the batch");
+        reverb.end_parameter_update();
+        assert_eq!(reverb.key, (1, 55.0, 120.0, 9000.0));
+        let key = reverb.key;
+        reverb.end_parameter_update();
+        assert_eq!(reverb.key, key, "ending a batch twice must not rebuild again");
     }
 }
