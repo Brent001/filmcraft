@@ -58,6 +58,10 @@ pub fn token_for_autostart(data_dir: Option<&Path>) -> Result<String, String> {
         };
     }
     let dir = data_dir.ok_or("FilmCraft has no writable data directory for the private control token")?;
+    ensure_token_file(dir)
+}
+
+fn ensure_token_file(dir: &Path) -> Result<String, String> {
     fs::create_dir_all(dir).map_err(|e| format!("cannot create FilmCraft data directory {}: {e}", dir.display()))?;
     let path = dir.join(filmcraft_engine::autosave::CONTROL_TOKEN_FILE);
     match fs::read_to_string(&path) {
@@ -478,5 +482,48 @@ mod tests {
         c.read_to_string(&mut reply).unwrap();
         server.join().unwrap();
         assert_eq!(serde_json::from_str::<Value>(&reply).unwrap(), json!({"id": 7, "ok": true}));
+    }
+}
+
+#[cfg(test)]
+mod autostart_token_tests {
+    use super::{ensure_token_file, valid_token};
+    use std::path::PathBuf;
+
+    fn temp_dir() -> PathBuf {
+        std::env::temp_dir().join(format!("filmcraft-control-token-{}", std::process::id()))
+    }
+
+    #[test]
+    fn settings_autostart_creates_and_reuses_a_private_random_token() {
+        let dir = temp_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        let token = ensure_token_file(&dir).expect("a data directory should allow token creation");
+        assert!(valid_token(&token));
+        assert_eq!(token.len(), 64);
+
+        let file = dir.join(filmcraft_engine::autosave::CONTROL_TOKEN_FILE);
+        let saved = std::fs::read_to_string(&file).expect("token file was written");
+        assert_eq!(saved, token);
+        assert_eq!(ensure_token_file(&dir).expect("existing token should be reused"), token);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&file).expect("token metadata").permissions().mode() & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_malformed_private_token_is_not_silently_replaced() {
+        let dir = temp_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test data directory");
+        let file = dir.join(filmcraft_engine::autosave::CONTROL_TOKEN_FILE);
+        std::fs::write(&file, "not-a-token").expect("write malformed test token");
+        let error = ensure_token_file(&dir).expect_err("invalid stored credentials must fail closed");
+        assert!(error.contains("invalid"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
