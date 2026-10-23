@@ -304,9 +304,7 @@ fn active(item: &TrackItem) -> Vec<(&EffectInstance, Mapping)> {
 
 /// Whether the item has audio effects that change its signal.
 pub fn has_effects(item: &TrackItem) -> bool {
-    item.effects.iter().any(|e| {
-        e.enabled && !e.def().is_some_and(|d| d.intrinsic) && mapping(&e.effect).is_some()
-    })
+    item.effects.iter().any(|e| e.enabled && !e.def().is_some_and(|d| d.intrinsic) && mapping(&e.effect).is_some())
 }
 
 struct Chain {
@@ -373,14 +371,7 @@ fn process_channel_block(fx: &mut [Box<dyn AudioEffect>], input: &mut [Vec<f32>]
         }
         6 => {
             let [c0, c1, c2, c3, c4, c5] = input else { unreachable!() };
-            let mut channels = [
-                &mut c0[start..end],
-                &mut c1[start..end],
-                &mut c2[start..end],
-                &mut c3[start..end],
-                &mut c4[start..end],
-                &mut c5[start..end],
-            ];
+            let mut channels = [&mut c0[start..end], &mut c1[start..end], &mut c2[start..end], &mut c3[start..end], &mut c4[start..end], &mut c5[start..end]];
             for effect in fx {
                 effect.process(&mut channels);
             }
@@ -398,14 +389,7 @@ fn process_channel_block(fx: &mut [Box<dyn AudioEffect>], input: &mut [Vec<f32>]
 
 /// Run `input` (planar, `input[c].len()` samples starting at timeline sample `in0`) through the
 /// chain, setting keyframed parameters per block.
-fn run(
-    chain: &mut Chain,
-    item: &TrackItem,
-    act: &[(&EffectInstance, Mapping)],
-    in0: i64,
-    input: &mut [Vec<f32>],
-    sr: u32,
-) {
+fn run(chain: &mut Chain, item: &TrackItem, act: &[(&EffectInstance, Mapping)], in0: i64, input: &mut [Vec<f32>], sr: u32) {
     let n = input.first().map_or(0, Vec::len);
     let mut i = 0;
     while i < n {
@@ -496,10 +480,7 @@ mod tests {
         evict_effect_cache_entries(&mut cache, &256, 256);
         assert_eq!(cache.len(), 256);
         assert!(cache.contains_key(&256), "the just-used effect chain must survive eviction");
-        assert!(
-            (0u16..256).any(|key| !cache.contains_key(&key)),
-            "cache pressure must evict an individual cold key"
-        );
+        assert!((0u16..256).any(|key| !cache.contains_key(&key)), "cache pressure must evict an individual cold key");
     }
 
     #[test]
