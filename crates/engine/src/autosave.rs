@@ -164,6 +164,10 @@ pub struct Preferences {
     pub auto_save: AutoSavePrefs,
     pub color: settings::ColorPrefs,
     pub graphics: settings::GraphicsPrefs,
+    /// GPU compositor, power preference and GPU export settings.
+    pub gpu: settings::GpuPrefs,
+    /// Authenticated localhost server for desktop MCP bridge clients.
+    pub control: settings::ControlPrefs,
     pub labels: settings::LabelPrefs,
     pub media: MediaPrefs,
     pub media_analysis: settings::MediaAnalysisPrefs,
@@ -194,6 +198,8 @@ impl Default for Preferences {
             auto_save: Default::default(),
             color: Default::default(),
             graphics: Default::default(),
+            gpu: Default::default(),
+            control: Default::default(),
             labels: Default::default(),
             media: Default::default(),
             media_analysis: Default::default(),
@@ -404,6 +410,7 @@ impl Preferences {
         self.playback.postroll_seconds = secs(self.playback.postroll_seconds);
         self.trim.large_trim_offset = self.trim.large_trim_offset.clamp(1, 1000);
         self.labels.sanitize_labels();
+        self.control.port = self.control.port.clamp(1, u16::MAX);
         self.appearance.sync_color_theme();
         self.version = settings::PREFS_VERSION;
     }
