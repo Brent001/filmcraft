@@ -99,10 +99,21 @@ pub struct ExportRenderer {
 
 impl ExportRenderer {
     /// The off-screen device, or `None` when this host has no usable adapter or this build no
-    /// wgpu backend.
+    /// wgpu backend. Defaults preserve the compositor's existing selection and 24-entry cache.
     pub fn new() -> Option<Self> {
+        Self::new_with_preferences("highPerformance", 24)
+    }
+
+    /// Use the saved desktop GPU power preference and bounded upload-cache size. The export device
+    /// is shared process-wide and created once, so these options are captured by its first creation.
+    pub fn new_with_preferences(power_preference: &str, upload_cache_limit: usize) -> Option<Self> {
         // `None` is kept too: a machine without an adapter does not search again on every export
         static SHARED: std::sync::OnceLock<Option<(wgpu::Instance, wgpu::Device, wgpu::Queue)>> = std::sync::OnceLock::new();
+        let preference = match power_preference {
+            "lowPower" => wgpu::PowerPreference::LowPower,
+            "none" => wgpu::PowerPreference::None,
+            _ => wgpu::PowerPreference::HighPerformance,
+        };
         let (instance, device, queue) = SHARED
             .get_or_init(|| {
                 // A build without a wgpu backend for this platform (`cargo build -p filmcraft-cli`
@@ -112,7 +123,11 @@ impl ExportRenderer {
                     return None;
                 }
                 let instance = wgpu::Instance::default();
-                let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+                let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: preference,
+                    ..Default::default()
+                }))
+                .ok()?;
                 let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
                 // wgpu's default handler panics on a validation or out-of-memory error; log it and
                 // send the remaining frames to the CPU instead.
@@ -125,7 +140,8 @@ impl ExportRenderer {
         if device_failed() {
             return None;
         }
-        let compositor = GpuCompositor::new(&device, &queue);
+        let mut compositor = GpuCompositor::new(&device, &queue);
+        compositor.set_upload_cache_limit(upload_cache_limit);
         Some(Self { _instance: instance, device, queue, compositor })
     }
 

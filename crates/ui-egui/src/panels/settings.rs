@@ -752,6 +752,72 @@ fn custom(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, name: &str
             note(ui, &t, &tlf!("Decoded frames held for the monitors and thumbnails: {used} of {budget}.", used = mb(used as u64), budget = mb(budget as u64)));
             note(ui, &t, tl!("FilmCraft keeps the rest of the RAM free for other applications."));
         }
+        "gpuInfo" => {
+            let mode = choice_text(get(&d.values, "gpu.previewCompositor"));
+            if let Some(g) = app.gpu.as_ref() {
+                let adapter = g.render_state.adapter.get_info();
+                note(
+                    ui,
+                    &t,
+                    &format!("GPU compositor active: {} ({:?}, {:?})", adapter.name, adapter.backend, adapter.device_type),
+                );
+                note(
+                    ui,
+                    &t,
+                    &format!(
+                        "Last compositor call: {:.2} ms · output: {}×{} · maximum texture side: {}",
+                        g.last_ms, g.size.0, g.size.1, g.max_texture
+                    ),
+                );
+                note(
+                    ui,
+                    &t,
+                    &format!(
+                        "GPU transitions: {} · CPU-fallback transitions: {}",
+                        g.compositor.gpu_transitions, g.compositor.cpu_transitions
+                    ),
+                );
+                note(
+                    ui,
+                    &t,
+                    &format!(
+                        "Upload cache: {} of {} entries · data uploaded since compositor creation: {}",
+                        g.compositor.upload_cache_entries(),
+                        g.compositor.upload_cache_limit(),
+                        mb(g.compositor.uploaded_bytes)
+                    ),
+                );
+            } else if mode == "cpu" {
+                note(ui, &t, "CPU compositor selected. The choice applies on the next launch.");
+            } else {
+                note(ui, &t, "GPU compositor is not active in this session; previews use CPU compositing or GPU initialization has not completed.");
+            }
+            let export_timing = filmcraft_gpu::export_renderer::timing::get();
+            note(
+                ui,
+                &t,
+                &format!(
+                    "GPU export totals: {} frame(s) · submit {:.1} ms · device/map wait {:.1} ms · pixel conversion {:.1} ms",
+                    export_timing.frames,
+                    export_timing.submit.as_secs_f64() * 1000.0,
+                    export_timing.map_wait.as_secs_f64() * 1000.0,
+                    export_timing.convert.as_secs_f64() * 1000.0
+                ),
+            );
+            note(
+                ui,
+                &t,
+                "GPU utilization percentages and driver memory residency are not exposed consistently across platforms by wgpu; the values above are compositor timing, cache, export and fallback telemetry.",
+            );
+        }
+        "controlInfo" => {
+            let enabled = get(&d.values, "control.autostart").as_bool().unwrap_or(false);
+            let port = get(&d.values, "control.port").as_u64().unwrap_or(9876);
+            let state = if enabled { "Autostart is enabled for the next launch." } else { "Autostart is disabled." };
+            note(ui, &t, state);
+            note(ui, &t, &format!("Local endpoint: 127.0.0.1:{port}"));
+            note(ui, &t, "The MCP bridge reads the same private control-token file from the FilmCraft data directory. The token itself is never displayed here.");
+        }
         "mediaCacheInfo" => {
             if d.cache_info.is_null() {
                 d.cache_info = app.session.execute("mediaCache.info", json!({})).unwrap_or(json!({}));

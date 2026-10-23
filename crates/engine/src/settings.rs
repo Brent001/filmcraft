@@ -23,9 +23,9 @@ use crate::commands::{CommandSpec, always, bad, bool_p, str_p};
 use crate::{EngineError, Result, Session};
 
 /// Version of the preferences file layout ([`crate::autosave::Preferences::version`]).
-/// v1: Auto Save, Audio (mixer automation), Playback (pre/postroll), Trim, Media (proxies), guides,
-/// Essential Sound presets. v2: every Settings category.
-pub const PREFS_VERSION: u32 = 2;
+/// v1: original Auto Save / audio / playback / trim preferences; v2: all Settings categories;
+/// v3: GPU acceleration and authenticated desktop control-server preferences.
+pub const PREFS_VERSION: u32 = 3;
 
 // ------------------------------------------------------------------ category values
 
@@ -701,6 +701,47 @@ impl Default for MemoryPrefs {
     }
 }
 
+/// Settings ▸ GPU & Performance. These apply at the next desktop launch.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct GpuPrefs {
+    /// `auto` (GPU with safe CPU fallback) or `cpu`.
+    pub preview_compositor: String,
+    /// `highPerformance`, `lowPower`, or `none`.
+    pub power_preference: String,
+    /// Allow GPU frame rendering during export when the normal graphics backend is active.
+    pub export_acceleration: bool,
+    /// Number of uploaded source-frame textures retained (8–64, default 24).
+    pub upload_cache_entries: u32,
+}
+
+impl Default for GpuPrefs {
+    fn default() -> Self {
+        Self {
+            preview_compositor: "auto".into(),
+            power_preference: "highPerformance".into(),
+            export_acceleration: true,
+            upload_cache_entries: 24,
+        }
+    }
+}
+
+/// Settings ▸ Control & MCP.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ControlPrefs {
+    /// Start the authenticated localhost control server on normal desktop launches.
+    pub autostart: bool,
+    /// Local TCP port for the desktop-to-MCP bridge.
+    pub port: u16,
+}
+
+impl Default for ControlPrefs {
+    fn default() -> Self {
+        Self { autostart: false, port: 9876 }
+    }
+}
+
 /// Settings ▸ Timeline.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -978,6 +1019,8 @@ const CACHE_MGMT: &[(&str, &str)] = &[
 const AUTO_SCROLL: &[(&str, &str)] = &[("noScroll", "No Scroll"), ("pageScroll", "Page Scroll"), ("smoothScroll", "Smooth Scroll")];
 const MOUSE_SCROLL: &[(&str, &str)] = &[("vertical", "Vertical"), ("horizontal", "Horizontal")];
 const HW_DECODE: &[(&str, &str)] = &[("auto", "Auto"), ("off", "Off")];
+const GPU_COMPOSITORS: &[(&str, &str)] = &[("auto", "Automatic (GPU, with CPU fallback)"), ("cpu", "CPU only")];
+const GPU_POWER: &[(&str, &str)] = &[("highPerformance", "High performance"), ("lowPower", "Low power"), ("none", "System default")];
 const TRACKS: &[(&str, &str)] = &[("useFile", "Use File"), ("mono", "Mono"), ("stereo", "Stereo"), ("5.1", "5.1"), ("adaptive", "Adaptive")];
 pub const DURATION_UNITS: &[(&str, &str)] = &[("frames", "Frames"), ("seconds", "Seconds")];
 
@@ -1149,6 +1192,25 @@ static CATEGORIES: &[Category] = &[
         ],
     },
     Category {
+        id: "gpu",
+        title: "GPU & Performance",
+        rows: &[
+            Row::Custom("gpuInfo"),
+            Row::Group(
+                "Acceleration",
+                &[
+                    f("gpu.previewCompositor", "Preview compositor", Kind::Choice(GPU_COMPOSITORS), true),
+                    f("gpu.powerPreference", "GPU power preference", Kind::Choice(GPU_POWER), true),
+                    b("gpu.exportAcceleration", "GPU-accelerated export", true),
+                    f("gpu.uploadCacheEntries", "GPU upload-cache entries", int(8.0, 64.0, "entries"), true),
+                ],
+            ),
+            Row::Note(
+                "Preview compositor, GPU power preference, upload-cache limit and GPU export acceleration apply at the next launch. Higher upload-cache limits retain more source frames in memory. Unsupported devices continue on the CPU compositor. FilmCraft reports compositor submission time, uploads and GPU/CPU transition counts; cross-platform GPU utilization percentages are not available through wgpu.",
+            ),
+        ],
+    },
+    Category {
         id: "graphics",
         title: "Graphics",
         rows: &[
@@ -1293,6 +1355,18 @@ static CATEGORIES: &[Category] = &[
             Row::Custom("memoryInfo"),
             f("memory.ramReservedGb", "RAM reserved for other applications", int(1.0, 1024.0, "GB"), false),
             f("memory.frameCacheMb", "Frame cache for monitors and thumbnails", int(64.0, 65_536.0, "MB"), true),
+        ],
+    },
+    Category {
+        id: "control",
+        title: "Control & MCP",
+        rows: &[
+            Row::Custom("controlInfo"),
+            b("control.autostart", "Enable MCP / Control Server on Startup", true),
+            f("control.port", "MCP / Control Server Port", int(1.0, 65_535.0, "port"), true),
+            Row::Note(
+                "Enabled on the next launch. The server listens only on 127.0.0.1 and requires a private 64-character token. FilmCraft creates a per-user token file automatically; do not share it.",
+            ),
         ],
     },
     Category {
@@ -1483,7 +1557,7 @@ pub fn sanitize(v: &mut Value, defaults: &Value) {
     }
 }
 
-/// Upgrade an older preferences file (`version` missing = v1) to [`PREFS_VERSION`].
+/// Upgrade older preferences files to [`PREFS_VERSION`].
 pub fn migrate(v: &mut Value) {
     let Some(m) = v.as_object_mut() else { return };
     let ver = m.get("version").and_then(Value::as_u64).unwrap_or(1);
@@ -1492,6 +1566,12 @@ pub fn migrate(v: &mut Value) {
         // (filled in from defaults by serde). The v1 "Auto Save" dialog wrote integer seconds for
         // pre/postroll; v2 stores them as reals, which serde reads either way.
         m.insert("version".into(), json!(2));
+    }
+    if ver < 3 {
+        // v3 adds GPU tuning and the desktop control/MCP server preferences. Missing fields are
+        // populated from Defaults, so existing users retain the current automatic GPU behavior
+        // and MCP stays disabled until explicitly enabled.
+        m.insert("version".into(), json!(3));
     }
     // Files from before appearance modes had one Color Theme: keep showing it, as a fixed Dark or
     // Light mode, instead of switching established users to another theme or to Auto.

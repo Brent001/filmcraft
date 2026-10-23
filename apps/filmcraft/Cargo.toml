@@ -29,6 +29,8 @@ filmcraft-platform = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
 serde_json = { workspace = true }
+# OS CSPRNG for the private desktop control token (no token is generated from timestamps or a PRNG).
+getrandom = "0.3.4"
 # Constant-time comparison of control-channel credentials.
 subtle = "2.6"
 log = { workspace = true }

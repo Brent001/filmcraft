@@ -18,6 +18,18 @@ const MAX_IDLE: usize = 4;
 
 type Conn = (BufReader<tokio::net::tcp::OwnedReadHalf>, tokio::net::tcp::OwnedWriteHalf);
 
+fn control_token() -> Option<String> {
+    // Explicit process configuration remains authoritative. Settings-based desktop autostart
+    // stores its credential in a private file so MCP clients can connect without a shell env var.
+    if let Ok(token) = std::env::var("FILMCRAFT_CONTROL_TOKEN") {
+        return Some(token);
+    }
+    let path = filmcraft_engine::autosave::default_data_dir()?.join(filmcraft_engine::autosave::CONTROL_TOKEN_FILE);
+    let token = std::fs::read_to_string(path).ok()?;
+    let token = token.trim();
+    (token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())).then(|| token.to_string())
+}
+
 pub struct BridgeClient {
     addr: String,
     /// Inherited from the same owner-controlled environment as the desktop app.
@@ -38,7 +50,7 @@ impl BridgeClient {
         if !matches!(host, "127.0.0.1" | "localhost" | "[::1]" | "::1") {
             return Err(AutomationError::BadRequest(format!("bridge address must be loopback, got `{addr}`")));
         }
-        Ok(Self { addr, token: std::env::var("FILMCRAFT_CONTROL_TOKEN").ok(), idle: Mutex::new(Vec::new()), next_id: AtomicU64::new(1) })
+        Ok(Self { addr, token: control_token(), idle: Mutex::new(Vec::new()), next_id: AtomicU64::new(1) })
     }
 
     /// Run engine command `id` in the app. A blocking export (`file.exportMedia` with

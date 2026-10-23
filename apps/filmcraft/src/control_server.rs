@@ -4,12 +4,15 @@
 //! (an HTTP request line from a browser's cross-origin `fetch`, a stray `nc`, binary junk) gets
 //! one error reply and the connection is closed, so nothing after it is executed. Lines are
 //! bounded ([`MAX_LINE`]) and so is the number of open connections ([`MAX_CONNECTIONS`]); junk
-//! never reaches the UI thread. Every request must carry the session credential from
-//! `FILMCRAFT_CONTROL_TOKEN`; without a configured credential the listener stays closed.
+//! never reaches the UI thread. Every request must carry a private 64-hex-character token.
+//! Explicit CLI launches read `FILMCRAFT_CONTROL_TOKEN`; settings-driven autostart uses a private
+//! per-user token file. The listener remains closed without a valid credential.
 //! See `docs/control-protocol.md`.
 
+use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -24,6 +27,106 @@ use subtle::ConstantTimeEq;
 pub const MAX_LINE: usize = 4 * 1024 * 1024;
 /// Connections served at once; further ones get an error line and are closed.
 pub const MAX_CONNECTIONS: usize = 16;
+
+fn valid_token(token: &str) -> bool {
+    token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn read_token_file(path: &Path) -> Result<String, String> {
+    let text = fs::read_to_string(path).map_err(|e| format!("cannot read control token file {}: {e}", path.display()))?;
+    let token = text.trim().to_string();
+    if !valid_token(&token) {
+        return Err(format!("control token file {} is invalid; remove it and restart FilmCraft to generate a new one", path.display()));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("cannot restrict permissions on control token file {}: {e}", path.display()))?;
+    }
+    Ok(token)
+}
+
+/// Return the control token used by settings-based autostart. A valid environment token keeps
+/// precedence and is also stored privately so a separately launched MCP bridge can find it.
+/// Otherwise a random token is created once in the platform/portable data directory. The token is
+/// never logged or exposed through Settings.
+pub fn token_for_autostart(data_dir: Option<&Path>) -> Result<String, String> {
+    let preferred = std::env::var("FILMCRAFT_CONTROL_TOKEN").ok();
+    if preferred.as_deref().is_some_and(|token| !valid_token(token)) {
+        return Err("FILMCRAFT_CONTROL_TOKEN must contain exactly 64 hexadecimal characters".into());
+    }
+    let dir = data_dir.ok_or("FilmCraft has no writable data directory for the private control token")?;
+    ensure_token_file_with_preference(dir, preferred.as_deref())
+}
+
+fn ensure_token_file(dir: &Path) -> Result<String, String> {
+    ensure_token_file_with_preference(dir, None)
+}
+
+fn ensure_token_file_with_preference(dir: &Path, preferred: Option<&str>) -> Result<String, String> {
+    fs::create_dir_all(dir).map_err(|e| format!("cannot create FilmCraft data directory {}: {e}", dir.display()))?;
+    let path = dir.join(filmcraft_engine::autosave::CONTROL_TOKEN_FILE);
+    match fs::read_to_string(&path) {
+        Ok(_) => matching_token(read_token_file(&path)?, preferred),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let token = match preferred {
+                Some(token) => token.to_string(),
+                None => {
+                    let mut random = [0_u8; 32];
+                    getrandom::fill(&mut random).map_err(|e| format!("cannot generate a secure MCP control token: {e}"))?;
+                    let hex = b"0123456789abcdef";
+                    let mut token = String::with_capacity(64);
+                    for byte in random {
+                        token.push(char::from(hex[usize::from(byte >> 4)]));
+                        token.push(char::from(hex[usize::from(byte & 0x0f)]));
+                    }
+                    token
+                }
+            };
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            match options.open(&path) {
+                Ok(mut file) => {
+                    file.write_all(token.as_bytes()).map_err(|e| format!("cannot write private control token {}: {e}", path.display()))?;
+                    file.sync_all().map_err(|e| format!("cannot sync private control token {}: {e}", path.display()))?;
+                    Ok(token)
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => matching_token(read_token_file(&path)?, preferred),
+                Err(e) => Err(format!("cannot create private control token {}: {e}", path.display())),
+            }
+        }
+        Err(e) => Err(format!("cannot inspect private control token {}: {e}", path.display())),
+    }
+}
+
+fn matching_token(saved: String, preferred: Option<&str>) -> Result<String, String> {
+    if preferred.is_some_and(|token| token != saved) {
+        return Err(
+            "FILMCRAFT_CONTROL_TOKEN differs from the saved private control token; unset the environment variable or remove the control-token file and restart FilmCraft".into(),
+        );
+    }
+    Ok(saved)
+}
+
+/// Start the server from Settings using an explicitly obtained private credential. Unlike the
+/// legacy CLI path below, bind/token errors are returned so the desktop can show them in its status.
+pub fn start_managed(port: u16, ctx: egui::Context, token: String) -> Result<Receiver<ControlRequest>, String> {
+    if !valid_token(&token) {
+        return Err("the MCP control token is invalid".into());
+    }
+    let listener = TcpListener::bind(("127.0.0.1", port))
+        .map_err(|e| format!("cannot listen on 127.0.0.1:{port}: {e}"))?;
+    let (tx, rx) = channel::<ControlRequest>();
+    log::info!("FilmCraft MCP / Control Server listening on 127.0.0.1:{port}");
+    std::thread::spawn(move || accept_loop(listener, tx, ctx, token));
+    Ok(rx)
+}
 
 pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
     start_with_token(port, ctx, std::env::var("FILMCRAFT_CONTROL_TOKEN").ok())
@@ -397,5 +500,67 @@ mod tests {
         c.read_to_string(&mut reply).unwrap();
         server.join().unwrap();
         assert_eq!(serde_json::from_str::<Value>(&reply).unwrap(), json!({"id": 7, "ok": true}));
+    }
+}
+
+#[cfg(test)]
+mod autostart_token_tests {
+    use super::{ensure_token_file, ensure_token_file_with_preference, valid_token};
+    use std::path::PathBuf;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("filmcraft-control-token-{}-{name}", std::process::id()))
+    }
+
+    #[test]
+    fn settings_autostart_creates_and_reuses_a_private_random_token() {
+        let dir = temp_dir("valid");
+        let _ = std::fs::remove_dir_all(&dir);
+        let token = ensure_token_file(&dir).expect("a data directory should allow token creation");
+        assert!(valid_token(&token));
+        assert_eq!(token.len(), 64);
+
+        let file = dir.join(filmcraft_engine::autosave::CONTROL_TOKEN_FILE);
+        let saved = std::fs::read_to_string(&file).expect("token file was written");
+        assert_eq!(saved, token);
+        assert_eq!(ensure_token_file(&dir).expect("existing token should be reused"), token);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&file).expect("token metadata").permissions().mode() & 0o777, 0o600);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn environment_token_is_shared_with_the_mcp_bridge_token_file() {
+        let dir = temp_dir("environment");
+        let _ = std::fs::remove_dir_all(&dir);
+        let expected = "ab".repeat(32);
+        assert_eq!(
+            ensure_token_file_with_preference(&dir, Some(&expected)).expect("valid environment token should be saved"),
+            expected
+        );
+        let file = dir.join(filmcraft_engine::autosave::CONTROL_TOKEN_FILE);
+        assert_eq!(std::fs::read_to_string(&file).expect("saved token"), expected);
+        assert_eq!(
+            ensure_token_file_with_preference(&dir, Some(&expected)).expect("matching environment token"),
+            expected
+        );
+        assert!(ensure_token_file_with_preference(&dir, Some(&"cd".repeat(32))).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_malformed_private_token_is_not_silently_replaced() {
+        let dir = temp_dir("invalid");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create test data directory");
+        let file = dir.join(filmcraft_engine::autosave::CONTROL_TOKEN_FILE);
+        std::fs::write(&file, "not-a-token").expect("write malformed test token");
+        let error = ensure_token_file(&dir).expect_err("invalid stored credentials must fail closed");
+        assert!(error.contains("invalid"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
