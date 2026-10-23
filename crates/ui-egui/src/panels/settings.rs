@@ -757,11 +757,21 @@ fn custom(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, name: &str
             if let Some(g) = app.gpu.as_ref() {
                 let adapter = g.render_state.adapter.get_info();
                 note(ui, &t, &format!("GPU compositor active: {} ({:?}, {:?})", adapter.name, adapter.backend, adapter.device_type));
-                note(
-                    ui,
-                    &t,
-                    &format!("Last compositor call: {:.2} ms · output: {}×{} · maximum texture side: {}", g.last_ms, g.size.0, g.size.1, g.max_texture),
-                );
+                let outputs = g
+                    .output_sizes()
+                    .into_iter()
+                    .map(|(slot, (width, height))| {
+                        let name = match slot {
+                            0 => "Program".to_owned(),
+                            1 => "Source".to_owned(),
+                            _ => format!("Monitor {slot}"),
+                        };
+                        format!("{name} {width}×{height}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let outputs = if outputs.is_empty() { "not rendered yet".to_owned() } else { outputs };
+                note(ui, &t, &format!("Last compositor call: {:.2} ms · outputs: {} · maximum texture side: {}", g.last_ms, outputs, g.max_texture));
                 note(ui, &t, &format!("GPU transitions: {} · CPU-fallback transitions: {}", g.compositor.gpu_transitions, g.compositor.cpu_transitions));
                 note(
                     ui,

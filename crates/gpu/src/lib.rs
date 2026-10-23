@@ -80,7 +80,10 @@ pub struct GpuCompositor {
     accum: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32))>,
     /// Copy of the accumulator under a blend-mode layer (allocated on first use).
     backdrop: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32))>,
-    output: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32))>,
+    /// Independent final textures for concurrently visible monitors (0 = Program, 1 = Source).
+    outputs: HashMap<u64, (wgpu::Texture, wgpu::TextureView, (u32, u32))>,
+    /// Destination slot used by the next top-level composite. Nested transition layers share it.
+    output_slot: u64,
     accum_readback_buf: Option<(wgpu::Buffer, u64)>,
     uploads: HashMap<(usize, u32, u32), Uploaded>,
     /// Maximum number of uploaded source-frame textures retained. Default 24 preserves the
@@ -279,6 +282,12 @@ fn prepare_layers(layers: &[PlanLayer]) -> PreparedPlan {
 }
 
 impl GpuCompositor {
+    /// Whether the standard-effect compute pipeline was created successfully on this device.
+    /// A working compositor alone does not imply that pixel effects are GPU-accelerated.
+    pub fn effects_accelerated(&self) -> bool {
+        self.fx.is_some()
+    }
+
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("filmcraft-composite"),
@@ -419,7 +428,8 @@ impl GpuCompositor {
             final_bgl,
             accum: None,
             backdrop: None,
-            output: None,
+            outputs: HashMap::new(),
+            output_slot: 0,
             accum_readback_buf: None,
             uploads: HashMap::new(),
             upload_cache_limit: 24,
@@ -432,6 +442,25 @@ impl GpuCompositor {
             cpu_transitions: 0,
             uploaded_bytes: 0,
         }
+    }
+
+    fn output_target(&mut self, w: u32, h: u32) -> wgpu::TextureView {
+        if let Some((_, view, _)) = self.outputs.get(&self.output_slot).filter(|(_, _, size)| *size == (w, h)) {
+            return view.clone();
+        }
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("filmcraft-monitor-output"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: OUTPUT_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        self.outputs.insert(self.output_slot, (texture, view.clone(), (w, h)));
+        view
     }
 
     fn target(
@@ -733,8 +762,17 @@ impl GpuCompositor {
     }
 
     /// [`composite`](Self::composite) with texel conversions already done by [`prepare`] (the
-    /// result is identical; only the upload work on this thread differs).
+    /// result is identical; only the upload work on this thread differs). Uses the default output
+    /// slot, retained for tests, exports, and single-output callers.
     pub fn composite_prepared(&mut self, plan: &FramePlan, prep: Option<&PreparedPlan>) -> (wgpu::TextureView, (u32, u32)) {
+        self.output_slot = 0;
+        self.render_plan(plan, prep, true, true)
+    }
+
+    /// Composite to an independent output for a specific UI monitor slot. This prevents two
+    /// monitors from overwriting the same native texture between layout and GPU presentation.
+    pub fn composite_prepared_for_slot(&mut self, plan: &FramePlan, prep: Option<&PreparedPlan>, slot: u64) -> (wgpu::TextureView, (u32, u32)) {
+        self.output_slot = slot;
         self.render_plan(plan, prep, true, true)
     }
 
@@ -766,7 +804,7 @@ impl GpuCompositor {
         } else {
             None
         };
-        let out_view = Self::target(&self.device, &mut self.output, w, h, OUTPUT_FORMAT, wgpu::TextureUsages::COPY_SRC);
+        let out_view = if resolve { self.output_target(w, h) } else { self.dummy.clone() };
         // Layers whose effects the GPU stage can't run (no stage on this device, or a working image
         // larger than a texture) are rendered on the CPU here and drawn as plain RGBA layers.
         let max_side = self.device.limits().max_texture_dimension_2d;
@@ -796,12 +834,28 @@ impl GpuCompositor {
         // (bind group, None for a fixed-function layer or Some(region of the accumulator to copy
         // into the backdrop) for a layer that reads the destination; Some(None): off the output)
         let mut bind_groups = Vec::with_capacity(layers.len());
+        // Allocate one aligned uniform arena for all final layer draws. A single upload avoids
+        // a buffer allocation and queue.write_buffer call for every clip in a multilayer timeline.
+        const LAYER_UNIFORM_BYTES: usize = UNIFORM_FLOATS * std::mem::size_of::<f32>();
+        let uniform_alignment = self.device.limits().min_uniform_buffer_offset_alignment.max(1) as usize;
+        let uniform_stride = LAYER_UNIFORM_BYTES.div_ceil(uniform_alignment) * uniform_alignment;
+        // Every layer can need a source-draw uniform (effect working image) plus a final layer
+        // uniform. They share this arena so even effect-heavy timelines allocate/upload once.
+        let uniform_slots = layers.len().max(1) * 2;
+        let uniform_size = uniform_stride * uniform_slots;
+        let mut layer_uniform_data = vec![0u8; uniform_size];
+        let layer_uniform_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("filmcraft-layer-uniforms"),
+            size: uniform_size as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         // the effect stage of each layer with effects (recorded right before its draw)
         let mut jobs: Vec<Option<fx::FxJob>> = Vec::with_capacity(layers.len());
         if let Some(f) = self.fx.as_mut() {
             f.begin_frame();
         }
-        for (l, k) in layers.iter().zip(&keys) {
+        for (layer_index, (l, k)) in layers.iter().zip(&keys).enumerate() {
             // (every frame was just uploaded; a missing upload draws transparent texels)
             let src = self.src_info(&l.frame, *k).unwrap_or(SrcInfo {
                 kind: 1,
@@ -824,12 +878,21 @@ impl GpuCompositor {
                         Self::uniforms(&src, &filmcraft_geom::Affine::scale(1.0 / n, 1.0 / n), 1.0, Blend::Normal, (lfx.size.0.max(1), lfx.size.1.max(1)));
                     // Effect sources use the working pixel center, avoiding interpolated vertex coordinates.
                     su[26] = n as f32;
-                    let sbuf = self.uniform_buffer(&su);
+                    let source_offset = layer_index * 2 * uniform_stride;
+                    for (index, value) in su.iter().enumerate() {
+                        let byte = source_offset + index * std::mem::size_of::<f32>();
+                        layer_uniform_data[byte..byte + 4].copy_from_slice(&value.to_le_bytes());
+                    }
+                    let source_binding = wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &layer_uniform_buffer,
+                        offset: source_offset as u64,
+                        size: std::num::NonZeroU64::new(LAYER_UNIFORM_BYTES as u64),
+                    });
                     let sbg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("fx-source"),
                         layout: &self.layer_bgl,
                         entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: sbuf.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 0, resource: source_binding },
                             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&views[0]) },
                             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&views[1]) },
                             wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&views[2]) },
@@ -865,9 +928,18 @@ impl GpuCompositor {
                 }
             };
             jobs.push(job);
-            let buf = self.uniform_buffer(&u);
+            let offset = (layer_index * 2 + 1) * uniform_stride;
+            for (index, value) in u.iter().enumerate() {
+                let byte = offset + index * std::mem::size_of::<f32>();
+                layer_uniform_data[byte..byte + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            let uniform_binding = wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: &layer_uniform_buffer,
+                offset: offset as u64,
+                size: std::num::NonZeroU64::new(LAYER_UNIFORM_BYTES as u64),
+            });
             let mut entries = vec![
-                wgpu::BindGroupEntry { binding: 0, resource: buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 0, resource: uniform_binding },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&tex[0]) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&tex[1]) },
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&tex[2]) },
@@ -883,6 +955,7 @@ impl GpuCompositor {
             let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("layer"), layout, entries: &entries });
             bind_groups.push((bg, region));
         }
+        self.queue.write_buffer(&layer_uniform_buffer, 0, &layer_uniform_data);
         if let Some(f) = self.fx.as_mut() {
             f.end_frame();
         }
@@ -963,7 +1036,7 @@ impl GpuCompositor {
         if steps.iter().any(|s| matches!(s, PlanStep::Transition { effect, .. } if effect.effect != "push")) {
             self.cpu_transitions += 1;
             let plan = FramePlan::Composite { width, height, steps: steps.to_vec() };
-            return self.composite_prepared(&FramePlan::Image(filmcraft_render::plan::execute_cpu(&plan)), None);
+            return self.render_plan(&FramePlan::Image(filmcraft_render::plan::execute_cpu(&plan)), None, true, true);
         }
         let empty = FramePlan::Layers { width, height, layers: Vec::new() };
         let (canvas, dims) = self.render_plan(&empty, None, true, false);
@@ -1142,7 +1215,7 @@ impl GpuCompositor {
 
     /// Read the output back as RGBA8 (tests / screenshots / thumbnails).
     pub fn read_output(&self) -> Option<(u32, u32, Vec<u8>)> {
-        let (tex, _, (w, h)) = self.output.as_ref()?;
+        let (tex, _, (w, h)) = self.outputs.get(&0)?;
         let row = (w * 4).div_ceil(256) * 256;
         let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("readback"),
