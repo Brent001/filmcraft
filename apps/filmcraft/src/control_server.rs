@@ -491,13 +491,13 @@ mod autostart_token_tests {
     use super::{ensure_token_file, valid_token};
     use std::path::PathBuf;
 
-    fn temp_dir() -> PathBuf {
-        std::env::temp_dir().join(format!("filmcraft-control-token-{}", std::process::id()))
+    fn temp_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("filmcraft-control-token-{}-{name}", std::process::id()))
     }
 
     #[test]
     fn settings_autostart_creates_and_reuses_a_private_random_token() {
-        let dir = temp_dir();
+        let dir = temp_dir("valid");
         let _ = std::fs::remove_dir_all(&dir);
         let token = ensure_token_file(&dir).expect("a data directory should allow token creation");
         assert!(valid_token(&token));
@@ -518,7 +518,7 @@ mod autostart_token_tests {
 
     #[test]
     fn a_malformed_private_token_is_not_silently_replaced() {
-        let dir = temp_dir();
+        let dir = temp_dir("invalid");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create test data directory");
         let file = dir.join(filmcraft_engine::autosave::CONTROL_TOKEN_FILE);
