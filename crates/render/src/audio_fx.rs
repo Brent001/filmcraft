@@ -354,7 +354,7 @@ const BLOCK: usize = 256;
 /// Call every processor with stack-backed channel slices for the common mono/stereo/5.1 layouts.
 /// This keeps the hot block loop from allocating a Vec of mutable slices every 256 samples.
 fn process_channel_block(fx: &mut [Box<dyn AudioEffect>], input: &mut [Vec<f32>], start: usize, end: usize) {
-    match input.as_mut_slice() {
+    match input {
         [c0] => {
             let mut channels = [&mut c0[start..end]];
             for effect in fx {
