@@ -1026,11 +1026,7 @@ const HW_DECODE: &[(&str, &str)] = &[("auto", "Auto"), ("off", "Off")];
 const GPU_COMPOSITORS: &[(&str, &str)] = &[("auto", "Automatic (GPU, with CPU fallback)"), ("cpu", "CPU only")];
 const GPU_POWER: &[(&str, &str)] = &[("highPerformance", "High performance"), ("lowPower", "Low power"), ("none", "System default")];
 #[cfg(target_os = "windows")]
-const GPU_BACKENDS: &[(&str, &str)] = &[
-    ("auto", "Automatic (Vulkan + DirectX 12)"),
-    ("dx12", "DirectX 12"),
-    ("vulkan", "Vulkan"),
-];
+const GPU_BACKENDS: &[(&str, &str)] = &[("auto", "Automatic (Vulkan + DirectX 12)"), ("dx12", "DirectX 12"), ("vulkan", "Vulkan")];
 #[cfg(target_os = "linux")]
 const GPU_BACKENDS: &[(&str, &str)] = &[("auto", "Automatic (system default)"), ("vulkan", "Vulkan")];
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
