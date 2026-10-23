@@ -137,6 +137,9 @@ impl ExportRenderer {
                     match backend_preference {
                         "dx12" => descriptor.backends = wgpu::Backends::DX12,
                         "vulkan" => descriptor.backends = wgpu::Backends::VULKAN,
+                        // Match the desktop window: on Windows, avoid initializing OpenGL as a
+                        // side backend because some vendor OpenGL drivers crash during init.
+                        "auto" if cfg!(target_os = "windows") => descriptor.backends = wgpu::Backends::PRIMARY,
                         _ => {}
                     }
                 }
