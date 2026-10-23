@@ -781,7 +781,7 @@ fn custom(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, name: &str
                     ui,
                     &t,
                     &format!(
-                        "Upload cache: {} of {} entries · bytes uploaded since compositor creation: {}",
+                        "Upload cache: {} of {} entries · data uploaded since compositor creation: {}",
                         g.compositor.upload_cache_entries(),
                         g.compositor.upload_cache_limit(),
                         mb(g.compositor.uploaded_bytes)
