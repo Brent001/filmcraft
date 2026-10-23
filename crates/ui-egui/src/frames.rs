@@ -441,8 +441,18 @@ impl FrameServer {
     }
 
     /// The default number of frame workers for this machine.
+    ///
+    /// Rendering effects also dispatch CPU-parallel pixel loops to Rayon. Using one independent
+    /// frame worker per logical CPU oversubscribes small machines (each worker can be waiting on
+    /// the same Rayon pool), and several stale effect-heavy frames can delay the playhead frame.
+    /// Keep about half as many frame jobs in flight, leaving room for the shared pixel pool, UI,
+    /// audio and hardware-decoder callbacks.
     pub fn default_workers() -> usize {
-        std::thread::available_parallelism().map(|n| n.get().clamp(2, 6)).unwrap_or(3)
+        frame_worker_count(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(3))
+    }
+
+    fn frame_worker_count(logical_cpus: usize) -> usize {
+        logical_cpus.max(1).div_ceil(2).clamp(1, 6)
     }
 
     pub fn set_context(&self, ctx: &egui::Context) {
@@ -1003,6 +1013,18 @@ fn render_job(job: &Job, pool: &Arc<MediaPool>, services: &Arc<dyn Services>, pr
 mod tests {
     use super::{PlaybackMeter, Target, background_work, playback_plan};
     use filmcraft_project::ItemId;
+
+    #[test]
+    fn frame_workers_leave_capacity_for_parallel_effect_rendering() {
+        use super::FrameServer;
+        assert_eq!(FrameServer::frame_worker_count(1), 1);
+        assert_eq!(FrameServer::frame_worker_count(2), 1);
+        assert_eq!(FrameServer::frame_worker_count(3), 2);
+        assert_eq!(FrameServer::frame_worker_count(4), 2);
+        assert_eq!(FrameServer::frame_worker_count(6), 3);
+        assert_eq!(FrameServer::frame_worker_count(8), 4);
+        assert_eq!(FrameServer::frame_worker_count(32), 6);
+    }
 
     #[test]
     fn only_item_thumbnails_are_background_work() {
