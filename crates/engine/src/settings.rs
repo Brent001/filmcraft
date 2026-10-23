@@ -1553,7 +1553,7 @@ pub fn sanitize(v: &mut Value, defaults: &Value) {
     }
 }
 
-/// Upgrade an older preferences file (`version` missing = v1) to [`PREFS_VERSION`].
+/// Upgrade older preferences files to [`PREFS_VERSION`].
 pub fn migrate(v: &mut Value) {
     let Some(m) = v.as_object_mut() else { return };
     let ver = m.get("version").and_then(Value::as_u64).unwrap_or(1);
@@ -1562,6 +1562,12 @@ pub fn migrate(v: &mut Value) {
         // (filled in from defaults by serde). The v1 "Auto Save" dialog wrote integer seconds for
         // pre/postroll; v2 stores them as reals, which serde reads either way.
         m.insert("version".into(), json!(2));
+    }
+    if ver < 3 {
+        // v3 adds GPU tuning and the desktop control/MCP server preferences. Missing fields are
+        // populated from Defaults, so existing users retain the current automatic GPU behavior
+        // and MCP stays disabled until explicitly enabled.
+        m.insert("version".into(), json!(3));
     }
     // Files from before appearance modes had one Color Theme: keep showing it, as a fixed Dark or
     // Light mode, instead of switching established users to another theme or to Auto.
