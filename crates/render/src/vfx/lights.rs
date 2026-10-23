@@ -14,17 +14,29 @@ fn blurred(src: &Image, sigma: f32) -> Image {
 
 /// Add `light` (premultiplied linear) to `img`: Add or Screen.
 fn add_image(img: &mut Image, light: &Image, gain: [f32; 3], screen: bool) {
-    img.px.par_chunks_mut(4).zip(light.px.par_chunks(4)).for_each(|(p, l)| {
-        let add = [l[0] * gain[0], l[1] * gain[1], l[2] * gain[2]];
-        if screen {
-            let a = [add[0].min(1.0), add[1].min(1.0), add[2].min(1.0)];
-            for k in 0..3 {
-                p[k] = p[k] + a[k] - p[k].min(1.0) * a[k];
+    let w = img.w;
+    let context = filmcraft_media::cancel::Context::current();
+    img.px.par_chunks_mut(w * 4).zip(light.px.par_chunks(w * 4)).for_each(|(ir, lr)| {
+        context.clone().run(|| {
+            if filmcraft_media::cancel::cancelled() {
+                return;
             }
-            p[3] = p[3] + (1.0 - p[3]) * a[0].max(a[1]).max(a[2]);
-        } else {
-            add_light(p, add);
-        }
+            for (i, (p, l)) in ir.chunks_mut(4).zip(lr.chunks(4)).enumerate() {
+                if i % 64 == 0 && filmcraft_media::cancel::cancelled() {
+                    break;
+                }
+                let add = [l[0] * gain[0], l[1] * gain[1], l[2] * gain[2]];
+                if screen {
+                    let a = [add[0].min(1.0), add[1].min(1.0), add[2].min(1.0)];
+                    for k in 0..3 {
+                        p[k] = p[k] + a[k] - p[k].min(1.0) * a[k];
+                    }
+                    p[3] = p[3] + (1.0 - p[3]) * a[0].max(a[1]).max(a[2]);
+                } else {
+                    add_light(p, add);
+                }
+            }
+        });
     });
 }
 
@@ -32,11 +44,23 @@ fn saturate_image(img: &mut Image, sat: f32) {
     if (sat - 1.0).abs() < 1e-4 {
         return;
     }
-    img.px.par_chunks_mut(4).for_each(|p| {
-        let l = luma([p[0], p[1], p[2]]);
-        for v in &mut p[..3] {
-            *v = (l + (*v - l) * sat).max(0.0);
-        }
+    let w = img.w;
+    let context = filmcraft_media::cancel::Context::current();
+    img.px.par_chunks_mut(w * 4).for_each(|row| {
+        context.clone().run(|| {
+            if filmcraft_media::cancel::cancelled() {
+                return;
+            }
+            for (i, p) in row.chunks_mut(4).enumerate() {
+                if i % 64 == 0 && filmcraft_media::cancel::cancelled() {
+                    break;
+                }
+                let l = luma([p[0], p[1], p[2]]);
+                for v in &mut p[..3] {
+                    *v = (l + (*v - l) * sat).max(0.0);
+                }
+            }
+        });
     });
 }
 
@@ -45,11 +69,23 @@ fn tint(img: &mut Image, c: [f32; 3], k: f32) {
     if k <= 0.0 {
         return;
     }
-    img.px.par_chunks_mut(4).for_each(|p| {
-        let l = luma([p[0], p[1], p[2]]);
-        for i in 0..3 {
-            p[i] += (l * c[i] * 1.5 - p[i]) * k;
-        }
+    let w = img.w;
+    let context = filmcraft_media::cancel::Context::current();
+    img.px.par_chunks_mut(w * 4).for_each(|row| {
+        context.clone().run(|| {
+            if filmcraft_media::cancel::cancelled() {
+                return;
+            }
+            for (i, p) in row.chunks_mut(4).enumerate() {
+                if i % 64 == 0 && filmcraft_media::cancel::cancelled() {
+                    break;
+                }
+                let l = luma([p[0], p[1], p[2]]);
+                for c in 0..3 {
+                    p[c] += (l * c[c] * 1.5 - p[c]) * k;
+                }
+            }
+        });
     });
 }
 
