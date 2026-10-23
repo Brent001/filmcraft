@@ -60,6 +60,7 @@ pub fn token_for_autostart(data_dir: Option<&Path>) -> Result<String, String> {
     ensure_token_file_with_preference(dir, preferred.as_deref())
 }
 
+#[cfg(test)]
 fn ensure_token_file(dir: &Path) -> Result<String, String> {
     ensure_token_file_with_preference(dir, None)
 }

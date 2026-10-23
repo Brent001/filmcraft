@@ -431,12 +431,6 @@ fn expire_later(path: PathBuf) {
     }
 }
 
-/// Configure `options` for `mode`, before eframe creates the wgpu instance. `backend_override`
-/// is normally `Backends::from_env()`, i.e. `WGPU_BACKEND`. Keeps wgpu's default power preference.
-pub fn apply(options: &mut NativeOptions, mode: Mode, backend_override: Option<Backends>) {
-    apply_for(options, mode, backend_override, cfg!(target_os = "windows"));
-}
-
 /// Apply the user's launch-time GPU power preference while preserving the adapter filtering and
 /// crash-safe backend selection below.
 pub fn apply_with_power_preference(options: &mut NativeOptions, mode: Mode, backend_override: Option<Backends>, preference: &str) {
