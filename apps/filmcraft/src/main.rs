@@ -44,8 +44,8 @@ use filmcraft_engine::Session;
 use filmcraft_engine::autosave::{AutosaveConfig, default_data_dir};
 use filmcraft_ui_egui::FilmcraftApp;
 use serde_json::json;
-use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Reverse-DNS app id: Linux `.desktop` file, hicolor icon name and Wayland app id.
 const APP_ID: &str = "ai.storyteller.filmcraft";
@@ -98,10 +98,7 @@ fn main() -> eframe::Result {
         }
     };
     let data_root = launch.data_dir.clone().or_else(default_data_dir);
-    let mut saved_prefs = data_root
-        .as_deref()
-        .map(|dir| filmcraft_engine::autosave::Preferences::load(&dir.join("preferences.json")))
-        .unwrap_or_default();
+    let mut saved_prefs = data_root.as_deref().map(|dir| filmcraft_engine::autosave::Preferences::load(&dir.join("preferences.json"))).unwrap_or_default();
     // Preserve the agent-driven focus/event-loop behavior only for explicit CLI/environment
     // control-server launches. Settings autostart keeps an ordinary interactive desktop window.
     let explicit_agent_mode = launch.control_port.is_some();
@@ -176,13 +173,7 @@ fn main() -> eframe::Result {
         let result = eframe::run_native(
             "FilmCraft",
             options,
-            app_creator(
-                effective_launch.clone(),
-                graphics.clone(),
-                Arc::clone(&app_created),
-                auto_control_token.clone(),
-                control_startup_error.clone(),
-            ),
+            app_creator(effective_launch.clone(), graphics.clone(), Arc::clone(&app_created), auto_control_token.clone(), control_startup_error.clone()),
         );
         let app_created = app_created.load(Ordering::Relaxed);
         match &result {
@@ -516,12 +507,7 @@ struct GpuExportOptions {
 
 impl Default for GpuExportOptions {
     fn default() -> Self {
-        Self {
-            enabled: false,
-            backend_preference: "auto".into(),
-            power_preference: "highPerformance".into(),
-            upload_cache_entries: 24,
-        }
+        Self { enabled: false, backend_preference: "auto".into(), power_preference: "highPerformance".into(), upload_cache_entries: 24 }
     }
 }
 
@@ -538,12 +524,8 @@ fn gpu_frame_renderer_factory() -> Option<Box<dyn filmcraft_export::FrameRendere
     if !options.enabled {
         return None;
     }
-    filmcraft_gpu::ExportRenderer::new_with_preferences(
-        &options.backend_preference,
-        &options.power_preference,
-        options.upload_cache_entries,
-    )
-    .map(|r| Box::new(GpuFrameRenderer(r)) as Box<dyn filmcraft_export::FrameRenderer>)
+    filmcraft_gpu::ExportRenderer::new_with_preferences(&options.backend_preference, &options.power_preference, options.upload_cache_entries)
+        .map(|r| Box::new(GpuFrameRenderer(r)) as Box<dyn filmcraft_export::FrameRenderer>)
 }
 
 fn backend_preference_for_mode(mode: graphics::Mode) -> &'static str {
@@ -567,12 +549,7 @@ fn export_backend_preference(mode: graphics::Mode, backend_override: Option<efra
     backend_preference_for_mode(mode)
 }
 
-fn register_gpu_frame_renderer(
-    backend_preference: &str,
-    power_preference: &str,
-    upload_cache_entries: usize,
-    enabled: bool,
-) {
+fn register_gpu_frame_renderer(backend_preference: &str, power_preference: &str, upload_cache_entries: usize, enabled: bool) {
     // The export GPU device is created lazily on its first frame. Keep a bounded shared settings
     // snapshot; the registry uses a non-capturing factory because it requires a function pointer.
     let mut options = gpu_export_options().lock().unwrap_or_else(|e| e.into_inner());
