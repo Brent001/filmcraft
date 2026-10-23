@@ -1107,9 +1107,9 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       BUILD_DATE: ${{ needs.version.outputs.date }}
       BUILD_SHA: ${{ github.sha }}
-      FIGCRAFT_VERSION: ${{ needs.version.outputs.version }}
-      FIGCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
-      FIGCRAFT_BUILD_SHA: ${{ github.sha }}
+      FILMCRAFT_VERSION: ${{ needs.version.outputs.version }}
+      FILMCRAFT_BUILD_DATE: ${{ needs.version.outputs.date }}
+      FILMCRAFT_BUILD_SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
@@ -1120,13 +1120,13 @@ jobs:
           key: release-server-${{ matrix.arch }}
       - name: Apply version override
         if: inputs.version != ''
-        run: cargo xtask version set "$VERSION" || cargo run --locked -q -p xtask -- version set "$VERSION" || true
+        run: cargo xtask version set "$VERSION"
       - name: Build and package (tar.gz)
-        run: packaging/server/package.sh
+        run: bash packaging/server/package.sh
       - name: Check the archive
         shell: bash
         run: |
-          tar -tzf "dist/release/${{ inputs.app-name }}-server-$VERSION-linux-${{ matrix.arch }}.tar.gz" || true
+          tar -tzf "dist/release/${{ inputs.app-name }}-server-$VERSION-linux-${{ matrix.arch }}.tar.gz"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-server-linux-${{ matrix.arch }}
