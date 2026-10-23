@@ -91,7 +91,7 @@ pub fn parse(env_control_port: Option<String>, args: impl IntoIterator<Item = Os
             "--no-recover" => l.recover = Some(false),
             "--data-dir" => l.data_dir = Some(args.next().map(PathBuf::from).ok_or("--data-dir needs a folder")?),
             "--graphics" => {
-                let name = args.next().ok_or("--graphics needs a mode: default, dx12 or software")?;
+                let name = args.next().ok_or("--graphics needs a mode: default, dx12, vulkan or software")?;
                 l.graphics = Some(graphics_mode(&name.to_string_lossy())?);
             }
             // everything after `--` is a file, whatever it looks like
