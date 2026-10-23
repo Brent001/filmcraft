@@ -699,6 +699,14 @@ impl GpuCompositor {
         buf
     }
 
+    /// Number of source-frame texture entries retained by the upload cache.
+    ///
+    /// This is a cache occupancy metric, not GPU memory usage: texture allocation sizes and
+    /// driver-side residency aren't exposed by wgpu across platforms.
+    pub fn upload_cache_entries(&self) -> usize {
+        self.uploads.len()
+    }
+
     /// Composite a plan; returns the output view (sRGB, over black) and its size.
     pub fn composite(&mut self, plan: &FramePlan) -> (wgpu::TextureView, (u32, u32)) {
         self.composite_prepared(plan, None)
