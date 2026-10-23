@@ -771,11 +771,7 @@ fn custom(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, name: &str
                     .collect::<Vec<_>>()
                     .join(", ");
                 let outputs = if outputs.is_empty() { "not rendered yet".to_owned() } else { outputs };
-                note(
-                    ui,
-                    &t,
-                    &format!("Last compositor call: {:.2} ms · outputs: {} · maximum texture side: {}", g.last_ms, outputs, g.max_texture),
-                );
+                note(ui, &t, &format!("Last compositor call: {:.2} ms · outputs: {} · maximum texture side: {}", g.last_ms, outputs, g.max_texture));
                 note(ui, &t, &format!("GPU transitions: {} · CPU-fallback transitions: {}", g.compositor.gpu_transitions, g.compositor.cpu_transitions));
                 note(
                     ui,
