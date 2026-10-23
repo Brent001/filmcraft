@@ -318,7 +318,11 @@ mod tests {
             assert!(parse_args(&["--graphics", mode.name()]).unwrap_err().contains("not available"));
         }
         assert!(parse_args(&["--graphics"]).is_err(), "missing mode");
-        assert!(parse_args(&["--graphics", "vulkan"]).unwrap_err().contains("vulkan"));
+        if LADDER.contains(&Mode::Vulkan) {
+            assert_eq!(launch(&["--graphics", "vulkan"]).graphics, Some(Mode::Vulkan));
+        } else {
+            assert!(parse_args(&["--graphics", "vulkan"]).unwrap_err().contains("vulkan"));
+        }
         assert!(parse_args(&["--graphics", "DEFAULT"]).is_err());
         assert!(parse_args(&["--graphics", &"x".repeat(1 << 16)]).is_err());
         assert!(USAGE.contains("--graphics"));
