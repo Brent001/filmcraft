@@ -561,7 +561,6 @@ fn register_gpu_frame_renderer(backend_preference: &str, power_preference: &str,
     filmcraft_export::register_frame_renderer(gpu_frame_renderer_factory);
 }
 
-
 /// Put the OS hardware video decoders in front of our own. Registered in a statement of its own:
 /// a log macro does not evaluate its arguments while no logger takes its level, which left the
 /// hardware decoders out of every run.
