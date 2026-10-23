@@ -83,6 +83,9 @@ pub struct GpuCompositor {
     output: Option<(wgpu::Texture, wgpu::TextureView, (u32, u32))>,
     accum_readback_buf: Option<(wgpu::Buffer, u64)>,
     uploads: HashMap<(usize, u32, u32), Uploaded>,
+    /// Maximum number of uploaded source-frame textures retained. Default 24 preserves the
+    /// original behavior; Settings may tune it between 8 and 64 entries.
+    upload_cache_limit: usize,
     clock: u64,
     dummy: wgpu::TextureView,
     /// The effect stage (None on devices without compute shaders or storage textures: layers
@@ -419,6 +422,7 @@ impl GpuCompositor {
             output: None,
             accum_readback_buf: None,
             uploads: HashMap::new(),
+            upload_cache_limit: 24,
             clock: 0,
             dummy,
             fx,
@@ -576,14 +580,7 @@ impl GpuCompositor {
             }
         };
         self.uploads.insert(key, up);
-        // keep the most recent uploads (enough for several stacked layers + playback lookahead)
-        if self.uploads.len() > 24 {
-            let mut v: Vec<(u64, (usize, u32, u32))> = self.uploads.iter().map(|(k, u)| (u.last_used, *k)).collect();
-            v.sort_unstable();
-            for (_, k) in v.into_iter().take(self.uploads.len() - 24) {
-                self.uploads.remove(&k);
-            }
-        }
+        self.trim_upload_cache();
         key
     }
 
@@ -705,6 +702,29 @@ impl GpuCompositor {
     /// driver-side residency aren't exposed by wgpu across platforms.
     pub fn upload_cache_entries(&self) -> usize {
         self.uploads.len()
+    }
+
+    /// The configured number of source-frame textures the GPU upload cache retains.
+    pub fn upload_cache_limit(&self) -> usize {
+        self.upload_cache_limit
+    }
+
+    /// Set the upload-cache limit and immediately evict least-recently-used entries if needed.
+    /// A cap prevents this tuning knob from allowing unbounded texture retention on low-memory GPUs.
+    pub fn set_upload_cache_limit(&mut self, limit: usize) {
+        self.upload_cache_limit = limit.clamp(8, 64);
+        self.trim_upload_cache();
+    }
+
+    fn trim_upload_cache(&mut self) {
+        if self.uploads.len() <= self.upload_cache_limit {
+            return;
+        }
+        let mut entries: Vec<(u64, (usize, u32, u32))> = self.uploads.iter().map(|(key, upload)| (upload.last_used, *key)).collect();
+        entries.sort_unstable();
+        for (_, key) in entries.into_iter().take(self.uploads.len() - self.upload_cache_limit) {
+            self.uploads.remove(&key);
+        }
     }
 
     /// Composite a plan; returns the output view (sRGB, over black) and its size.
