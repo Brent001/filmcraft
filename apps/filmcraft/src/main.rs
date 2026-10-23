@@ -118,6 +118,17 @@ fn main() -> eframe::Result {
                 control_startup_error = Some(error);
             }
         }
+    } else if explicit_agent_mode && std::env::var_os("FILMCRAFT_CONTROL_TOKEN").is_none() {
+        // Explicit CLI launches work without requiring users to manually mint/export a secret.
+        // Persist a private token so the separate MCP bridge can authenticate using the documented
+        // token-file flow. If a token environment variable was supplied, keep that contract.
+        match control_server::token_for_autostart(data_root.as_deref()) {
+            Ok(token) => auto_control_token = Some(token),
+            Err(error) => {
+                log::error!("MCP / Control Server startup failed: {error}");
+                control_startup_error = Some(error);
+            }
+        }
     }
     let log_dir = data_root.as_ref().map(|d| d.join(logging::LOG_DIR));
     log::info!("FilmCraft {} ({} {})", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH);
