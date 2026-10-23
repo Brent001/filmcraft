@@ -505,7 +505,7 @@ mod tests {
 
 #[cfg(test)]
 mod autostart_token_tests {
-    use super::{ensure_token_file, valid_token};
+    use super::{ensure_token_file, ensure_token_file_with_preference, valid_token};
     use std::path::PathBuf;
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -530,6 +530,25 @@ mod autostart_token_tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(std::fs::metadata(&file).expect("token metadata").permissions().mode() & 0o777, 0o600);
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn environment_token_is_shared_with_the_mcp_bridge_token_file() {
+        let dir = temp_dir("environment");
+        let _ = std::fs::remove_dir_all(&dir);
+        let expected = "ab".repeat(32);
+        assert_eq!(
+            ensure_token_file_with_preference(&dir, Some(&expected)).expect("valid environment token should be saved"),
+            expected
+        );
+        let file = dir.join(filmcraft_engine::autosave::CONTROL_TOKEN_FILE);
+        assert_eq!(std::fs::read_to_string(&file).expect("saved token"), expected);
+        assert_eq!(
+            ensure_token_file_with_preference(&dir, Some(&expected)).expect("matching environment token"),
+            expected
+        );
+        assert!(ensure_token_file_with_preference(&dir, Some(&"cd".repeat(32))).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
