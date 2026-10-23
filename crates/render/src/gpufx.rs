@@ -1265,7 +1265,7 @@ impl FxOp {
                 let w = img.w;
                 img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
                     for x in 0..w {
-                        let d = ((x as f32 + 0.5 - cx).hypot(y as f32 + 0.5 - cy));
+                        let d = (x as f32 + 0.5 - cx).hypot(y as f32 + 0.5 - cy);
                         let a = (r - d + 0.5).clamp(0.0, 1.0) * op;
                         if a > 0.0 {
                             let p = &mut row[x * 4..x * 4 + 4];
