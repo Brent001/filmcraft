@@ -4,8 +4,9 @@
 //! (an HTTP request line from a browser's cross-origin `fetch`, a stray `nc`, binary junk) gets
 //! one error reply and the connection is closed, so nothing after it is executed. Lines are
 //! bounded ([`MAX_LINE`]) and so is the number of open connections ([`MAX_CONNECTIONS`]); junk
-//! never reaches the UI thread. Every request must carry the session credential from
-//! `FILMCRAFT_CONTROL_TOKEN`; without a configured credential the listener stays closed.
+//! never reaches the UI thread. Every request must carry a private 64-hex-character token.
+//! Explicit CLI launches read `FILMCRAFT_CONTROL_TOKEN`; settings-driven autostart uses a private
+//! per-user token file. The listener remains closed without a valid credential.
 //! See `docs/control-protocol.md`.
 
 use std::fs::{self, OpenOptions};
