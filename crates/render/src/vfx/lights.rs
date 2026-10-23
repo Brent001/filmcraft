@@ -65,7 +65,7 @@ fn saturate_image(img: &mut Image, sat: f32) {
 }
 
 /// Replace the hue of a light buffer with `c` (keeping its luminance), by `k`.
-fn tint(img: &mut Image, c: [f32; 3], k: f32) {
+fn tint(img: &mut Image, tint_color: [f32; 3], k: f32) {
     if k <= 0.0 {
         return;
     }
@@ -81,8 +81,8 @@ fn tint(img: &mut Image, c: [f32; 3], k: f32) {
                     break;
                 }
                 let l = luma([p[0], p[1], p[2]]);
-                for c in 0..3 {
-                    p[c] += (l * c[c] * 1.5 - p[c]) * k;
+                for channel in 0..3 {
+                    p[channel] += (l * tint_color[channel] * 1.5 - p[channel]) * k;
                 }
             }
         });
