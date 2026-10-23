@@ -47,35 +47,43 @@ fn read_token_file(path: &Path) -> Result<String, String> {
     Ok(token)
 }
 
-/// Return the control token used by settings-based autostart. A supplied environment token keeps
-/// precedence; otherwise a random token is created once in the platform/portable data directory.
-/// The token value is never logged or exposed through Settings.
+/// Return the control token used by settings-based autostart. A valid environment token keeps
+/// precedence and is also stored privately so a separately launched MCP bridge can find it.
+/// Otherwise a random token is created once in the platform/portable data directory. The token is
+/// never logged or exposed through Settings.
 pub fn token_for_autostart(data_dir: Option<&Path>) -> Result<String, String> {
-    if let Ok(token) = std::env::var("FILMCRAFT_CONTROL_TOKEN") {
-        return if valid_token(&token) {
-            Ok(token)
-        } else {
-            Err("FILMCRAFT_CONTROL_TOKEN must contain exactly 64 hexadecimal characters".into())
-        };
+    let preferred = std::env::var("FILMCRAFT_CONTROL_TOKEN").ok();
+    if preferred.as_deref().is_some_and(|token| !valid_token(token)) {
+        return Err("FILMCRAFT_CONTROL_TOKEN must contain exactly 64 hexadecimal characters".into());
     }
     let dir = data_dir.ok_or("FilmCraft has no writable data directory for the private control token")?;
-    ensure_token_file(dir)
+    ensure_token_file_with_preference(dir, preferred.as_deref())
 }
 
 fn ensure_token_file(dir: &Path) -> Result<String, String> {
+    ensure_token_file_with_preference(dir, None)
+}
+
+fn ensure_token_file_with_preference(dir: &Path, preferred: Option<&str>) -> Result<String, String> {
     fs::create_dir_all(dir).map_err(|e| format!("cannot create FilmCraft data directory {}: {e}", dir.display()))?;
     let path = dir.join(filmcraft_engine::autosave::CONTROL_TOKEN_FILE);
     match fs::read_to_string(&path) {
-        Ok(_) => read_token_file(&path),
+        Ok(_) => matching_token(read_token_file(&path)?, preferred),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let mut random = [0_u8; 32];
-            getrandom::fill(&mut random).map_err(|e| format!("cannot generate a secure MCP control token: {e}"))?;
-            let hex = b"0123456789abcdef";
-            let mut token = String::with_capacity(64);
-            for byte in random {
-                token.push(char::from(hex[usize::from(byte >> 4)]));
-                token.push(char::from(hex[usize::from(byte & 0x0f)]));
-            }
+            let token = match preferred {
+                Some(token) => token.to_string(),
+                None => {
+                    let mut random = [0_u8; 32];
+                    getrandom::fill(&mut random).map_err(|e| format!("cannot generate a secure MCP control token: {e}"))?;
+                    let hex = b"0123456789abcdef";
+                    let mut token = String::with_capacity(64);
+                    for byte in random {
+                        token.push(char::from(hex[usize::from(byte >> 4)]));
+                        token.push(char::from(hex[usize::from(byte & 0x0f)]));
+                    }
+                    token
+                }
+            };
             let mut options = OpenOptions::new();
             options.write(true).create_new(true);
             #[cfg(unix)]
@@ -89,12 +97,21 @@ fn ensure_token_file(dir: &Path) -> Result<String, String> {
                     file.sync_all().map_err(|e| format!("cannot sync private control token {}: {e}", path.display()))?;
                     Ok(token)
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => read_token_file(&path),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => matching_token(read_token_file(&path)?, preferred),
                 Err(e) => Err(format!("cannot create private control token {}: {e}", path.display())),
             }
         }
         Err(e) => Err(format!("cannot inspect private control token {}: {e}", path.display())),
     }
+}
+
+fn matching_token(saved: String, preferred: Option<&str>) -> Result<String, String> {
+    if preferred.is_some_and(|token| token != saved) {
+        return Err(
+            "FILMCRAFT_CONTROL_TOKEN differs from the saved private control token; unset the environment variable or remove the control-token file and restart FilmCraft".into(),
+        );
+    }
+    Ok(saved)
 }
 
 /// Start the server from Settings using an explicitly obtained private credential. Unlike the
