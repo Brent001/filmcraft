@@ -157,12 +157,13 @@ impl ExportRenderer {
                     };
                     descriptor.backend_options.dx12.shader_compiler = shader_compiler.with_env();
                 }
+                let selected_backends = descriptor.backends;
                 let instance = wgpu::Instance::new(descriptor);
-                let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: preference,
-                    ..Default::default()
-                }))
-                .ok()?;
+                // Use the same duplicate-driver-aware adapter picker as the Windows preview
+                // window. RequestAdapter alone can choose a stale entry when one GPU appears
+                // through multiple installed versions of the same Vulkan driver.
+                let adapters = pollster::block_on(instance.enumerate_adapters(selected_backends));
+                let adapter = crate::adapter::pick(&adapters, None, preference).ok()?;
                 let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
                 // wgpu's default handler panics on a validation or out-of-memory error; log it and
                 // send the remaining frames to the CPU instead.
