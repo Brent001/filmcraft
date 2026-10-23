@@ -44,7 +44,7 @@ use filmcraft_engine::Session;
 use filmcraft_engine::autosave::{AutosaveConfig, default_data_dir};
 use filmcraft_ui_egui::FilmcraftApp;
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Reverse-DNS app id: Linux `.desktop` file, hicolor icon name and Wayland app id.
@@ -98,7 +98,7 @@ fn main() -> eframe::Result {
         }
     };
     let data_root = launch.data_dir.clone().or_else(default_data_dir);
-    let saved_prefs = data_root
+    let mut saved_prefs = data_root
         .as_deref()
         .map(|dir| filmcraft_engine::autosave::Preferences::load(&dir.join("preferences.json")))
         .unwrap_or_default();
@@ -146,11 +146,27 @@ fn main() -> eframe::Result {
     // mode, which moves on after starts that died before their window painted (a driver crash),
     // see graphics.rs.
     let backend_override = eframe::wgpu::Backends::from_env();
-    let mut graphics = graphics::GraphicsStart::begin(data_root.as_deref(), backend_override.is_some(), launch.graphics);
-    // The GPU export renderer creates its own wgpu instance with every backend; after a start
-    // fell back, that would load the driver that failed. Exports then composite on the CPU.
-    if graphics.mode() == graphics::Mode::Default && saved_prefs.gpu.export_acceleration {
-        register_gpu_frame_renderer(&saved_prefs.gpu.power_preference, saved_prefs.gpu.upload_cache_entries as usize);
+    // An explicit backend in Settings acts like --graphics, except WGPU_BACKEND and --graphics
+    // both take precedence. Automatic remains governed by the existing crash-recovery state.
+    let saved_backend_mode = match saved_prefs.gpu.backend.as_str() {
+        "dx12" => Some(graphics::Mode::Dx12),
+        "vulkan" => Some(graphics::Mode::Vulkan),
+        _ => None,
+    };
+    let backend_from_settings = launch.graphics.is_none() && backend_override.is_none() && saved_backend_mode.is_some();
+    let forced_graphics = launch.graphics.or_else(|| if backend_override.is_none() { saved_backend_mode } else { None });
+    let mut graphics = graphics::GraphicsStart::begin(data_root.as_deref(), backend_override.is_some(), forced_graphics);
+
+    // The export renderer has its own wgpu instance. Use the same backend/power/cache preferences;
+    // if window startup steps down after a driver failure, update this factory before the window
+    // starts so exports do not immediately try the backend that failed to initialize.
+    if saved_prefs.gpu.export_acceleration && graphics.mode() != graphics::Mode::Software {
+        register_gpu_frame_renderer(
+            export_backend_preference(graphics.mode(), backend_override),
+            &saved_prefs.gpu.power_preference,
+            saved_prefs.gpu.upload_cache_entries as usize,
+            true,
+        );
     }
     let started = loop {
         let mut options = native_options(explicit_agent_mode);
@@ -173,9 +189,36 @@ fn main() -> eframe::Result {
         match &result {
             // wgpu reported the failure (no adapter, device creation failed) before the app
             // existed: try the next mode in this process.
-            Err(e) if !app_created && graphics::is_graphics_failure(e) && graphics.step_down() => {
-                log::warn!("graphics start failed: {e}");
-                continue;
+            Err(e) if !app_created && graphics::is_graphics_failure(e) => {
+                if graphics.step_down() {
+                    log::warn!("graphics start failed: {e}");
+                    if backend_from_settings {
+                        // Keep the selected setting aligned with the fallback that worked; otherwise
+                        // a requested Vulkan/DX12 backend could crash again on every next launch.
+                        let fallback_backend = backend_preference_for_mode(graphics.mode());
+                        if saved_prefs.gpu.backend != fallback_backend {
+                            match saved_prefs.set("gpu.backend", json!(fallback_backend)) {
+                                Ok(()) => {
+                                    if let Some(dir) = data_root.as_deref()
+                                        && let Err(save_error) = saved_prefs.save(&dir.join("preferences.json"))
+                                    {
+                                        log::warn!("could not save graphics backend fallback preference: {save_error}");
+                                    }
+                                }
+                                Err(save_error) => log::warn!("could not save graphics backend fallback preference: {save_error}"),
+                            }
+                        }
+                    }
+                    if saved_prefs.gpu.export_acceleration {
+                        register_gpu_frame_renderer(
+                            export_backend_preference(graphics.mode(), backend_override),
+                            &saved_prefs.gpu.power_preference,
+                            saved_prefs.gpu.upload_cache_entries as usize,
+                            graphics.mode() != graphics::Mode::Software,
+                        );
+                    }
+                    continue;
+                }
             }
             // Closed before the second frame: the window still came up.
             Ok(()) if app_created => graphics.confirm(),
