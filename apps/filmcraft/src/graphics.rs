@@ -439,12 +439,7 @@ pub fn apply(options: &mut NativeOptions, mode: Mode, backend_override: Option<B
 
 /// Apply the user's launch-time GPU power preference while preserving the adapter filtering and
 /// crash-safe backend selection below.
-pub fn apply_with_power_preference(
-    options: &mut NativeOptions,
-    mode: Mode,
-    backend_override: Option<Backends>,
-    preference: &str,
-) {
+pub fn apply_with_power_preference(options: &mut NativeOptions, mode: Mode, backend_override: Option<Backends>, preference: &str) {
     // Keep wgpu's documented environment override higher priority than the saved preference.
     if std::env::var_os("WGPU_POWER_PREF").is_none()
         && let WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup
@@ -472,10 +467,7 @@ fn apply_for(options: &mut NativeOptions, mode: Mode, backend_override: Option<B
     // explicit WGPU_DX12_COMPILER override authoritative.
     #[cfg(target_os = "windows")]
     if windows {
-        let bundled_dxc = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|dir| dir.join("dxcompiler.dll")))
-            .filter(|path| path.is_file());
+        let bundled_dxc = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join("dxcompiler.dll"))).filter(|path| path.is_file());
         let shader_compiler = match bundled_dxc {
             Some(path) => {
                 log::info!("DX12 shader compiler: bundled DXC at {}", path.display());
