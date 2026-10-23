@@ -8,7 +8,10 @@ Startup**, and keep or change the port. The next normal desktop launch starts th
 server automatically. The app creates a 256-bit random token in `control-token` under FilmCraft's data
 directory; on Unix this file is restricted to the owning user (mode `0600`). The MCP bridge reads the
 same file automatically, so the usual same-user workflow does not need a terminal environment variable.
-The token is never shown in Settings or written to the log.
+The token is never shown in Settings or written to the log. This setting starts FilmCraft's local
+control endpoint; your MCP host still needs a one-time MCP server entry that launches
+`filmcraft-cli mcp --bridge 127.0.0.1:9876`. Once configured, the MCP host starts that bridge
+automatically, so you don't need to run the command in a terminal yourself.
 
 **Manual/agent launch:** `filmcraft --control 9876` (or `FILMCRAFT_CONTROL_PORT`) starts the control
 server for an explicit agent-driven launch. It requires `FILMCRAFT_CONTROL_TOKEN`: 64 hexadecimal
