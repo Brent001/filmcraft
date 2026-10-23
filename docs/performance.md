@@ -6,15 +6,20 @@ and `.md` (options and sections: [testing.md](testing.md) §5). Agents read live
 
 ## Desktop GPU controls and telemetry
 
-Settings → **GPU & Performance** controls the preview compositor (`auto` with CPU fallback, or
-`cpu`), adapter power preference (high performance, low power, or system default), GPU export
-acceleration, and the upload-cache limit (8–64 entries; the default remains 24). These are launch-time
-preferences. The cache limit and power preference apply to both the preview compositor and the
-off-screen export renderer, whose wgpu device is created lazily once per process. A larger upload
-cache can reuse more source textures during multi-layer playback and export, at the cost of retaining
-more pixel data and GPU textures in memory. The existing driver-aware adapter selection, graphics crash
-recovery and CPU fallback remain in place; selecting CPU preview compositing does not disable GPU
-rendering for export when export acceleration is enabled.
+Settings → **GPU & Performance** controls the graphics backend (Automatic, DirectX 12 on
+Windows, or Vulkan on Windows/Linux), preview compositor (`auto` with CPU fallback, or `cpu`),
+adapter power preference (high performance, low power, or system default), GPU export acceleration,
+and the upload-cache limit (8–64 entries; the default remains 24). These are launch-time preferences.
+Automatic on Windows keeps both DX12 and Vulkan available while leaving OpenGL out of the instance to
+avoid known driver initialization crashes. Explicit Vulkan and DX12 modes isolate the selected backend.
+The cache limit and power preference apply to both the preview compositor and the off-screen export
+renderer, whose wgpu device is created lazily once per process. A larger upload cache can reuse more
+source textures during multi-layer playback and export, at the cost of retaining more pixel data and
+GPU textures in memory. Windows x64/ARM64 installers and portable archives bundle Microsoft's
+hash-verified DXC runtime so DX12 can compile FilmCraft's WGSL compute shaders; x86 keeps wgpu's
+automatic compiler selection. Existing driver-aware adapter selection, graphics crash recovery, and
+CPU fallback remain in place. Selecting CPU preview compositing does not disable GPU export when
+export acceleration is enabled.
 
 The category's **GPU compositor telemetry** reports the active adapter/backend/device type, the
 last compositor call duration measured on the CPU, output size, maximum texture side, transition counts
