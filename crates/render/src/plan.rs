@@ -171,7 +171,12 @@ fn simple_transition(id: &str) -> bool {
 /// with effects off). None: the clip is rendered on the CPU.
 fn gpu_chain<'a>(project: &Project, item: &'a TrackItem, opts: RenderOptions) -> Option<Vec<&'a filmcraft_project::EffectInstance>> {
     let is_media = project.item(item.item).is_some_and(|p| matches!(p.kind, ItemKind::Media(_) | ItemKind::Subclip { .. }));
-    if !is_media || item.has_opacity_masks() {
+    if !is_media {
+        log::debug!("GPU effect fallback for item {:?}: only media/subclip layers have a direct GPU source", item.item);
+        return None;
+    }
+    if item.has_opacity_masks() {
+        log::debug!("GPU effect fallback for item {:?}: opacity masks still use the CPU renderer", item.item);
         return None;
     }
     if !opts.effects {
@@ -183,7 +188,12 @@ fn gpu_chain<'a>(project: &Project, item: &'a TrackItem, opts: RenderOptions) ->
             continue;
         }
         let masked = e.masks.iter().any(|m| m.mode != filmcraft_project::MaskMode::None);
-        if masked || !crate::gpufx::GPU_EFFECTS.contains(&e.effect.as_str()) {
+        if masked {
+            log::debug!("GPU effect fallback for '{}': effect masks still use the CPU renderer", e.effect);
+            return None;
+        }
+        if !crate::gpufx::GPU_EFFECTS.contains(&e.effect.as_str()) {
+            log::debug!("GPU effect fallback for '{}': no GPU compute kernel is registered for this effect", e.effect);
             return None;
         }
         chain.push(e);
@@ -191,11 +201,63 @@ fn gpu_chain<'a>(project: &Project, item: &'a TrackItem, opts: RenderOptions) ->
     Some(chain)
 }
 
+/// Build the Source-monitor frame as a one-layer GPU plan when the exact Rec. 709
+/// source decode can be reproduced by the compositor. Unsupported source colour transforms
+/// return None and remain on the CPU reference path.
+pub fn plan_source_item(
+    project: &Project,
+    item: ItemId,
+    t: Tick,
+    scale: f32,
+    sources: &dyn SourceProvider,
+) -> Option<FramePlan> {
+    let pi = project.item(item)?;
+    if matches!(pi.kind, ItemKind::Sequence(_)) {
+        return Some(plan_frame(project, item, t, RenderOptions { scale, ..Default::default() }, sources));
+    }
+
+    let src = sources.source(item)?;
+    let frame = src.video_frame(FrameRequest { time: t, scale }).ok()?;
+    let full_w = src.info().video.as_ref().map_or(frame.width, |v| v.width) as f32;
+    let decimation = crate::decimation(frame.width as f32, full_w * scale).max(1);
+    let pipeline = &filmcraft_color::ColorPipeline::REC709;
+    let source_space = crate::colorman::source_space(project, item, &frame);
+    let needs_management = crate::colorman::needs_management(pipeline, source_space, &frame);
+    let input = if needs_management {
+        crate::colorman::gpu_input(project, item, pipeline, source_space, &frame)
+    } else {
+        None
+    };
+    // Do not approximate source colour management. Log/HDR/RGB cases without an exact
+    // compositor transform continue through render_item() on the CPU.
+    if needs_management && input.is_none() {
+        return None;
+    }
+
+    let width = (frame.width as usize / decimation).max(1);
+    let height = (frame.height as usize / decimation).max(1);
+    // The common case needs no resampling: draw the decoded frame directly, avoiding an
+    // unnecessary Rgba32Float effects target and source pass. Keep the GPU working-image path
+    // for actual decimation so its box average stays identical to the CPU reference.
+    let layer = if decimation == 1 {
+        PlanLayer { frame: frame.clone(), matrix: Affine::IDENTITY, opacity: 1.0, blend: Blend::Normal, fx: None, input }
+    } else {
+        let fx = LayerFx { size: (width as u32, height as u32), decimation: decimation as u32, ops: Vec::new() };
+        PlanLayer { frame: frame.clone(), matrix: Affine::IDENTITY, opacity: 1.0, blend: Blend::Normal, fx: Some(Arc::new(fx)), input }
+    };
+    Some(FramePlan::Layers { width, height, layers: vec![layer] })
+}
+
 /// Plan the frame at timeline `t`.
 pub fn plan_frame(project: &Project, seq_id: ItemId, t: Tick, opts: RenderOptions, sources: &dyn SourceProvider) -> FramePlan {
     let Some(seq) = project.sequence(seq_id) else { return FramePlan::Image(crate::Image::new(1, 1)) };
     let (w, h) = output_size(seq, opts.scale);
     if whole_frame_on_cpu(project, seq, t) {
+        if !seq.settings.color.is_plain() {
+            log::debug!("CPU frame fallback at {:?}: sequence colour pipeline is HDR or wide-gamut", t);
+        } else {
+            log::debug!("CPU frame fallback at {:?}: an adjustment layer or unsupported transition is active", t);
+        }
         return FramePlan::Image(crate::render_sequence(project, seq_id, t, opts, sources));
     }
     let mut layers = PlanStack::default();
