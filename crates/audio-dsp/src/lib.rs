@@ -122,6 +122,11 @@ pub trait AudioEffect: Send {
     /// Set a parameter by id; the value is clamped to its range. Returns `false` for unknown ids.
     /// Takes effect smoothly from the next processed sample.
     fn set_param(&mut self, id: &str, value: f32) -> bool;
+    /// Begin a group of related parameter updates. Effects with expensive derived state may defer
+    /// rebuilding that state until `end_parameter_update`; ordinary effects need no special work.
+    fn begin_parameter_update(&mut self) {}
+    /// Finish a group started by `begin_parameter_update`.
+    fn end_parameter_update(&mut self) {}
     /// Current (target) value of a parameter.
     fn param(&self, id: &str) -> Option<f32>;
     /// Clear all internal state (delay lines, envelopes, filter memories); smoothed parameters
