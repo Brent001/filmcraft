@@ -438,7 +438,10 @@ pub fn apply_with_power_preference(
     backend_override: Option<Backends>,
     preference: &str,
 ) {
-    if let WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup {
+    // Keep wgpu's documented environment override higher priority than the saved preference.
+    if std::env::var_os("WGPU_POWER_PREF").is_none()
+        && let WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup
+    {
         create.power_preference = match preference {
             "lowPower" => wgpu::PowerPreference::LowPower,
             "none" => wgpu::PowerPreference::None,
