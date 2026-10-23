@@ -81,9 +81,9 @@ jobs:
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $zip = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
           try {
-            $entries = @($zip.Entries | ForEach-Object { $_.FullName -replace '\\\\', '/' })
-            $compilers = @($entries | Where-Object { $_ -match '(?i)dxcompiler\\.dll$' })
-            $validators = @($entries | Where-Object { $_ -match '(?i)dxil\\.dll$' })
+            $entries = @($zip.Entries | ForEach-Object { $_.FullName -replace '\\', '/' })
+            $compilers = @($entries | Where-Object { $_ -match '(?i)dxcompiler\.dll$' })
+            $validators = @($entries | Where-Object { $_ -match '(?i)dxil\.dll$' })
             if ($compilers.Count -eq 0) { throw 'Official DXC archive is missing dxcompiler.dll' }
             if ($validators.Count -eq 0) { throw 'Official DXC archive is missing dxil.dll' }
             Write-Output "Found $($compilers.Count) DXC compiler binaries and $($validators.Count) DXIL validator binaries."
