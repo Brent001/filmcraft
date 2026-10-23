@@ -354,39 +354,34 @@ const BLOCK: usize = 256;
 /// Call every processor with stack-backed channel slices for the common mono/stereo/5.1 layouts.
 /// This keeps the hot block loop from allocating a Vec of mutable slices every 256 samples.
 fn process_channel_block(fx: &mut [Box<dyn AudioEffect>], input: &mut [Vec<f32>], start: usize, end: usize) {
-    match input.len() {
-        1 => {
-            let [c0] = input else { unreachable!() };
+    match input.as_mut_slice() {
+        [c0] => {
             let mut channels = [&mut c0[start..end]];
             for effect in fx {
                 effect.process(&mut channels);
             }
         }
-        2 => {
-            let [c0, c1] = input else { unreachable!() };
+        [c0, c1] => {
             let mut channels = [&mut c0[start..end], &mut c1[start..end]];
             for effect in fx {
                 effect.process(&mut channels);
             }
         }
-        6 => {
-            let [c0, c1, c2, c3, c4, c5] = input else { unreachable!() };
+        [c0, c1, c2, c3, c4, c5] => {
             let mut channels = [&mut c0[start..end], &mut c1[start..end], &mut c2[start..end], &mut c3[start..end], &mut c4[start..end], &mut c5[start..end]];
             for effect in fx {
                 effect.process(&mut channels);
             }
         }
-        // The project renderer currently produces 1, 2 or 6 channel audio. Keep this fallback
-        // for future layouts rather than silently passing new channel counts through unchanged.
-        _ => {
-            let mut channels = input.iter_mut().map(|c| &mut c[start..end]).collect::<Vec<_>>();
+        // Keep a safe fallback for channel layouts added in the future.
+        other => {
+            let mut channels = other.iter_mut().map(|c| &mut c[start..end]).collect::<Vec<_>>();
             for effect in fx {
                 effect.process(&mut channels);
             }
         }
     }
 }
-
 /// Run `input` (planar, `input[c].len()` samples starting at timeline sample `in0`) through the
 /// chain, setting keyframed parameters per block.
 fn run(chain: &mut Chain, item: &TrackItem, act: &[(&EffectInstance, Mapping)], in0: i64, input: &mut [Vec<f32>], sr: u32) {
