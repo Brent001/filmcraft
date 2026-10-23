@@ -1,10 +1,18 @@
 # Control protocol & MCP
 
 ## Desktop control channel
-`filmcraft --control 9876` (or `FILMCRAFT_CONTROL_PORT`) listens on `127.0.0.1:<port>` (loopback only).
-The listener requires `FILMCRAFT_CONTROL_TOKEN`: 64 random hex characters shared with authorized
-clients through their inherited environment. Generate a fresh token for each desktop session, then
-start the desktop and bridge from that environment:
+The desktop control server listens on `127.0.0.1:<port>` only. The default port is `9876`.
+
+**Settings-driven autostart:** open Settings → **Control & MCP**, enable **Enable MCP / Control Server on
+Startup**, and keep or change the port. The next normal desktop launch starts the authenticated control
+server automatically. The app creates a 256-bit random token in `control-token` under FilmCraft's data
+directory; on Unix this file is restricted to the owning user (mode `0600`). The MCP bridge reads the
+same file automatically, so the usual same-user workflow does not need a terminal environment variable.
+The token is never shown in Settings or written to the log.
+
+**Manual/agent launch:** `filmcraft --control 9876` (or `FILMCRAFT_CONTROL_PORT`) starts the control
+server for an explicit agent-driven launch. It requires `FILMCRAFT_CONTROL_TOKEN`: 64 hexadecimal
+characters shared with the authorized bridge through the inherited environment. For example:
 
 ```sh
 export FILMCRAFT_CONTROL_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
@@ -12,11 +20,14 @@ filmcraft --control 9876 &
 filmcraft-cli mcp --bridge 127.0.0.1:9876
 ```
 
-The CLI / MCP bridge reads this variable automatically. Keep it private: don't put the value in
-command-line arguments, logs, checked-in MCP configuration, or shared files. Without a valid value,
-the desktop leaves the listener closed. Every raw JSON request must include the same top-level
-`token` string; missing or incorrect credentials get an error and close the connection before any
-request is dispatched. Loopback alone does not restrict clients to the desktop owner's OS account.
+The bridge prefers `FILMCRAFT_CONTROL_TOKEN` when it is set; otherwise it reads the private
+`control-token` file from the default FilmCraft data directory. If you launch the desktop with a custom
+`--data-dir`, set `FILMCRAFT_DATA_DIR` to the same directory for the bridge. Keep the token private:
+don't put it in command-line arguments, logs, checked-in MCP configuration, or shared files. Without a
+valid token the listener stays closed. Every raw JSON request must include the same top-level `token`
+string; missing or incorrect credentials get an error and close the connection before any request is
+dispatched. Loopback alone does not restrict clients to the desktop owner's OS account, so protect the
+token file and don't share it.
 
 One JSON request per line → one JSON reply per line. The app opts out of macOS App Nap
 (`apps/filmcraft/src/app_nap.rs`): a hidden window would otherwise drop the whole process to
