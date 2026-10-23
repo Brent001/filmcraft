@@ -403,12 +403,18 @@ pub struct FilmcraftApp {
     menu_workspaces: (Vec<String>, String),
 }
 
+#[derive(Default)]
+struct MonitorGpuOutput {
+    texture: Option<egui::TextureId>,
+    last_key: Option<FrameKey>,
+    size: (u32, u32),
+}
+
 pub struct GpuState {
     pub render_state: eframe::egui_wgpu::RenderState,
     pub compositor: filmcraft_gpu::GpuCompositor,
-    pub texture: Option<egui::TextureId>,
-    pub last_key: Option<FrameKey>,
-    pub size: (u32, u32),
+    /// Separate retained presentation for each visible monitor (0 = Program, 1 = Source).
+    outputs: HashMap<u64, MonitorGpuOutput>,
     /// Composite time of the last frame (ms).
     pub last_ms: f32,
     /// Set by the device's uncaptured-error handler: the GPU path failed (validation, lost
@@ -416,6 +422,13 @@ pub struct GpuState {
     pub broken: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Largest texture side the device accepts.
     pub max_texture: u32,
+}
+
+impl GpuState {
+    /// Last completed image for a monitor slot, used while its requested frame is rendering.
+    pub fn last_presentation(&self, slot: u64) -> (Option<egui::TextureId>, Option<FrameKey>) {
+        self.outputs.get(&slot).map_or((None, None), |o| (o.texture, o.last_key))
+    }
 }
 
 /// Largest texture side a plan needs on the GPU (output and every layer).
@@ -486,7 +499,15 @@ impl FilmcraftApp {
             Ok(mut compositor) if !broken.load(std::sync::atomic::Ordering::Relaxed) => {
                 compositor.set_upload_cache_limit(self.session.prefs.gpu.upload_cache_entries as usize);
                 let max_texture = rs.device.limits().max_texture_dimension_2d;
-                self.gpu = Some(GpuState { render_state: rs, compositor, texture: None, last_key: None, size: (0, 0), last_ms: 0.0, broken, max_texture });
+                let adapter_name = rs.adapter.get_info().name;
+                if compositor.effects_accelerated() {
+                    log::info!("GPU compositor and standard-effect compute pipeline enabled on {adapter_name}");
+                    self.ui.status = format!("GPU effects and compositing active on {adapter_name}");
+                } else {
+                    log::warn!("GPU compositor enabled on {adapter_name}, but its compute effect stage is unavailable; effect layers still render on the CPU");
+                    self.ui.status = format!("GPU compositor active on {adapter_name}; GPU effect kernels unavailable, effects render on CPU");
+                }
+                self.gpu = Some(GpuState { render_state: rs, compositor, outputs: HashMap::new(), last_ms: 0.0, broken, max_texture });
             }
             _ => log::error!("GPU compositor failed to initialise; compositing on the CPU"),
         }
@@ -495,25 +516,40 @@ impl FilmcraftApp {
     /// Drop the GPU compositor after a GPU error; the monitors composite on the CPU from then on.
     fn disable_gpu(&mut self, why: &str) {
         log::error!("GPU compositor disabled: {why}");
-        if let Some(g) = self.gpu.take()
-            && let Some(id) = g.texture
-        {
-            g.render_state.renderer.write().free_texture(&id);
+        if let Some(g) = self.gpu.take() {
+            let mut renderer = g.render_state.renderer.write();
+            for output in g.outputs.values() {
+                if let Some(id) = output.texture {
+                    renderer.free_texture(&id);
+                }
+            }
         }
         self.ui.status = tl!("Graphics problem: switched to software compositing").into();
     }
 
-    /// Composite a plan on the GPU and return the egui texture showing it.
+    /// Composite a plan for the Program monitor (slot 0) and return its retained egui texture.
     pub fn gpu_present(&mut self, key: FrameKey, plan: &frames::GpuPlan) -> Option<(egui::TextureId, (u32, u32))> {
+        self.gpu_present_for_slot(key, plan, 0)
+    }
+
+    /// Composite into a monitor-specific retained texture. Program and Source render in the same
+    /// egui frame, so they must not share the compositor's transient output target or native ID.
+    pub fn gpu_present_for_slot(
+        &mut self,
+        key: FrameKey,
+        plan: &frames::GpuPlan,
+        slot: u64,
+    ) -> Option<(egui::TextureId, (u32, u32))> {
         if self.gpu.as_ref()?.broken.load(std::sync::atomic::Ordering::Relaxed) {
             self.disable_gpu("device error");
             return None;
         }
         let g = self.gpu.as_mut()?;
-        if g.last_key == Some(key)
-            && let Some(t) = g.texture
+        if let Some(output) = g.outputs.get(&slot)
+            && output.last_key == Some(key)
+            && let Some(id) = output.texture
         {
-            return Some((t, g.size));
+            return Some((id, output.size));
         }
         if plan_side(&plan.plan) > g.max_texture as usize {
             self.disable_gpu("frame larger than the GPU's maximum texture size");
@@ -521,7 +557,7 @@ impl FilmcraftApp {
         }
         let t0 = web_time::Instant::now();
         let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let (view, size) = g.compositor.composite_prepared(&plan.plan, Some(&plan.prepared));
+            let (view, size) = g.compositor.composite_prepared_for_slot(&plan.plan, Some(&plan.prepared), slot);
             (view.clone(), size)
         }));
         let Ok((view, size)) = ran else {
@@ -530,17 +566,19 @@ impl FilmcraftApp {
         };
         let g = self.gpu.as_mut()?;
         g.last_ms = t0.elapsed().as_secs_f32() * 1000.0;
-        let mut renderer = g.render_state.renderer.write();
-        let id = match g.texture {
+        let GpuState { render_state, outputs, .. } = g;
+        let output = outputs.entry(slot).or_default();
+        let mut renderer = render_state.renderer.write();
+        let id = match output.texture {
             Some(id) => {
-                renderer.update_egui_texture_from_wgpu_texture(&g.render_state.device, &view, eframe::wgpu::FilterMode::Linear, id);
+                renderer.update_egui_texture_from_wgpu_texture(&render_state.device, &view, eframe::wgpu::FilterMode::Linear, id);
                 id
             }
-            None => renderer.register_native_texture(&g.render_state.device, &view, eframe::wgpu::FilterMode::Linear),
+            None => renderer.register_native_texture(&render_state.device, &view, eframe::wgpu::FilterMode::Linear),
         };
-        g.texture = Some(id);
-        g.last_key = Some(key);
-        g.size = size;
+        output.texture = Some(id);
+        output.last_key = Some(key);
+        output.size = size;
         Some((id, size))
     }
 }
