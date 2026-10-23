@@ -711,6 +711,8 @@ pub struct GpuPrefs {
     pub power_preference: String,
     /// Allow GPU frame rendering during export when the normal graphics backend is active.
     pub export_acceleration: bool,
+    /// Number of uploaded source-frame textures retained (8–64, default 24).
+    pub upload_cache_entries: u32,
 }
 
 impl Default for GpuPrefs {
@@ -719,6 +721,7 @@ impl Default for GpuPrefs {
             preview_compositor: "auto".into(),
             power_preference: "highPerformance".into(),
             export_acceleration: true,
+            upload_cache_entries: 24,
         }
     }
 }
@@ -1199,10 +1202,11 @@ static CATEGORIES: &[Category] = &[
                     f("gpu.previewCompositor", "Preview compositor", Kind::Choice(GPU_COMPOSITORS), true),
                     f("gpu.powerPreference", "GPU power preference", Kind::Choice(GPU_POWER), true),
                     b("gpu.exportAcceleration", "GPU-accelerated export", true),
+                    f("gpu.uploadCacheEntries", "GPU upload-cache entries", int(8.0, 64.0, "entries"), true),
                 ],
             ),
             Row::Note(
-                "Preview compositor, GPU power preference and GPU export acceleration apply at the next launch. Unsupported devices continue on the CPU compositor. FilmCraft reports compositor submission time, uploads and GPU/CPU transition counts; cross-platform GPU utilization percentages are not available through wgpu.",
+                "Preview compositor, GPU power preference, upload-cache limit and GPU export acceleration apply at the next launch. Higher upload-cache limits retain more source frames in memory. Unsupported devices continue on the CPU compositor. FilmCraft reports compositor submission time, uploads and GPU/CPU transition counts; cross-platform GPU utilization percentages are not available through wgpu.",
             ),
         ],
     },
