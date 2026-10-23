@@ -497,6 +497,10 @@ impl Preferences {
     }
 }
 
+/// Private per-install credential used by the desktop control server and MCP bridge when
+/// `FILMCRAFT_CONTROL_TOKEN` is not provided in the process environment.
+pub const CONTROL_TOKEN_FILE: &str = "control-token";
+
 /// A file with this name next to the executable makes the install portable: its data directory is
 /// `<exe dir>/data` instead of the per-user one (the Windows portable zip ships it).
 pub const PORTABLE_MARKER: &str = "portable.txt";
