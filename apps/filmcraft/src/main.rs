@@ -150,7 +150,7 @@ fn main() -> eframe::Result {
     // The GPU export renderer creates its own wgpu instance with every backend; after a start
     // fell back, that would load the driver that failed. Exports then composite on the CPU.
     if graphics.mode() == graphics::Mode::Default && saved_prefs.gpu.export_acceleration {
-        register_gpu_frame_renderer();
+        register_gpu_frame_renderer(&saved_prefs.gpu.power_preference, saved_prefs.gpu.upload_cache_entries as usize);
     }
     let started = loop {
         let mut options = native_options(explicit_agent_mode);
@@ -465,9 +465,13 @@ impl filmcraft_export::FrameRenderer for GpuFrameRenderer {
     }
 }
 
-fn register_gpu_frame_renderer() {
-    filmcraft_export::register_frame_renderer(|| {
-        filmcraft_gpu::ExportRenderer::new().map(|r| Box::new(GpuFrameRenderer(r)) as Box<dyn filmcraft_export::FrameRenderer>)
+fn register_gpu_frame_renderer(power_preference: &str, upload_cache_entries: usize) {
+    // The export GPU device is created lazily on its first frame; keep these owned settings alive
+    // for the registry callback and apply the same tuning as the preview compositor.
+    let power_preference = power_preference.to_string();
+    filmcraft_export::register_frame_renderer(move || {
+        filmcraft_gpu::ExportRenderer::new_with_preferences(&power_preference, upload_cache_entries)
+            .map(|r| Box::new(GpuFrameRenderer(r)) as Box<dyn filmcraft_export::FrameRenderer>)
     });
 }
 
