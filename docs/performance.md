@@ -4,6 +4,23 @@
 and `.md` (options and sections: [testing.md](testing.md) §5). Agents read live counters with
 `perf.stats` ([control-protocol.md](control-protocol.md)).
 
+## Desktop GPU controls and telemetry
+
+Settings → **GPU & Performance** controls the preview compositor (`auto` with CPU fallback, or
+`cpu`), adapter power preference (high performance, low power, or system default), and whether the
+GPU frame renderer is registered for export. These are launch-time preferences. The existing
+driver-aware adapter selection, graphics crash recovery and CPU fallback remain in place; selecting
+CPU preview compositing does not disable GPU rendering for export when export acceleration is enabled.
+
+The category's **GPU compositor telemetry** reports the active adapter/backend/device type, the
+last compositor submission time measured on the CPU, output size, maximum texture side, transition
+counts on GPU vs CPU fallback, bytes uploaded since compositor creation, and upload-cache entry count.
+These are genuine FilmCraft counters, not an estimated hardware utilization percentage or driver
+memory-residency reading. wgpu does not expose those latter values consistently across platforms.
+When the GPU device is unsupported or fails, FilmCraft reports the reason and uses CPU compositing
+rather than pretending that the GPU path is active. The authenticated desktop MCP/control autostart
+options are documented in [control-protocol.md](control-protocol.md).
+
 ## Interactive builds and redraw work
 
 For interactive editing, build with `cargo build --release -p filmcraft --features whisper` and
