@@ -29,8 +29,9 @@
 //! # Getting back
 //! A fallback mode shows a notice with a reset button in the window (`graphics.notice.reset`,
 //! [`GraphicsStart::reset_to_default`]); `--graphics default` does the same from the command
-//! line, and `--graphics dx12|software` picks a mode by hand. An explicit `WGPU_BACKEND` leaves
-//! the saved state alone: the user is in charge.
+//! line, and `--graphics dx12|vulkan|software` picks a mode by hand. Settings ▸ GPU & Performance
+//! can make the same backend choice for normal launches. An explicit `WGPU_BACKEND` leaves the
+//! saved crash-recovery state alone: the user is in charge.
 //!
 //! All files are written beside and renamed into place, so a reader never sees half a file; two
 //! instances updating [`STATE_FILE`] at the same moment can lose one update (a failure counted
@@ -306,7 +307,7 @@ impl GraphicsStart {
         let file = state.display();
         let next = match forced {
             Some(mode) => {
-                log::info!("graphics mode {} chosen with --graphics", mode.name());
+                log::info!("graphics mode {} explicitly selected", mode.name());
                 Saved { mode, failures: 0 }
             }
             None => {
@@ -491,10 +492,9 @@ fn apply_for(options: &mut NativeOptions, mode: Mode, backend_override: Option<B
         // eframe's default (`WGPU_BACKEND`, else PRIMARY | GL), except on Windows: there it
         // includes GL. Creating that backend can crash inside AMD's atio6axx.dll before adapter
         // selection or any Rust error handling runs, so the window never appears. Choosing an
-        // adapter afterwards is too late: only leaving GL out of the instance avoids it. Keep
-        // Vulkan and DX12 both: forcing DX12 alone sends shaders through FXC (which rejects
-        // fx.wgsl, silently falling back to the CPU) and leaves machines without DX12 with no
-        // backend at all.
+        // adapter afterwards is too late: only leaving GL out of the instance avoids it. Keep both
+        // Vulkan and DX12 in Auto: either backend may be unavailable, and DX12 needs its DXC
+        // runtime to compile FilmCraft's WGSL compute effects.
         Mode::Default if windows => {
             create.instance_descriptor.backends = backend_override.unwrap_or(Backends::PRIMARY);
             // wgpu's own choice of adapter, except for a GPU that Windows lists through two
