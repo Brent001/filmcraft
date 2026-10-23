@@ -1076,6 +1076,7 @@ mod gpu_control_preference_tests {
     #[test]
     fn gpu_and_control_preferences_have_safe_defaults() {
         let prefs = Preferences::default();
+        assert_eq!(prefs.gpu.backend, "auto");
         assert_eq!(prefs.gpu.preview_compositor, "auto");
         assert_eq!(prefs.gpu.power_preference, "highPerformance");
         assert!(prefs.gpu.export_acceleration);
@@ -1087,6 +1088,7 @@ mod gpu_control_preference_tests {
     #[test]
     fn gpu_and_control_preferences_round_trip_and_validate_choices() {
         let mut prefs = Preferences::default();
+        prefs.set("gpu.backend", json!("vulkan")).expect("known GPU backend");
         prefs.set("gpu.previewCompositor", json!("cpu")).expect("known compositor");
         prefs.set("gpu.powerPreference", json!("lowPower")).expect("known power preference");
         prefs.set("gpu.exportAcceleration", json!(false)).expect("boolean setting");
@@ -1096,6 +1098,7 @@ mod gpu_control_preference_tests {
         assert!(prefs.set("gpu.powerPreference", json!("maximum")).is_err());
 
         let loaded = Preferences::from_value(prefs.to_value());
+        assert_eq!(loaded.gpu.backend, "vulkan");
         assert_eq!(loaded.gpu.preview_compositor, "cpu");
         assert_eq!(loaded.gpu.power_preference, "lowPower");
         assert!(!loaded.gpu.export_acceleration);
@@ -1114,6 +1117,7 @@ mod gpu_control_preference_tests {
         }
         let migrated = Preferences::from_value(value);
         assert_eq!(migrated.version, crate::settings::PREFS_VERSION);
+        assert_eq!(migrated.gpu.backend, "auto");
         assert_eq!(migrated.gpu.preview_compositor, "auto");
         assert_eq!(migrated.gpu.power_preference, "highPerformance");
         assert_eq!(migrated.gpu.upload_cache_entries, 24);
