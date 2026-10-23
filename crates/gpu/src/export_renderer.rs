@@ -144,10 +144,8 @@ impl ExportRenderer {
                 // Match the preview window's compiler behavior so WGSL compute effects work on DX12.
                 #[cfg(target_os = "windows")]
                 {
-                    let bundled_dxc = std::env::current_exe()
-                        .ok()
-                        .and_then(|exe| exe.parent().map(|dir| dir.join("dxcompiler.dll")))
-                        .filter(|path| path.is_file());
+                    let bundled_dxc =
+                        std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join("dxcompiler.dll"))).filter(|path| path.is_file());
                     let shader_compiler = match bundled_dxc {
                         Some(path) => wgpu::Dx12Compiler::DynamicDxc { dxc_path: path.to_string_lossy().into_owned() },
                         None => wgpu::Dx12Compiler::Auto,
