@@ -99,14 +99,14 @@ pub struct ExportRenderer {
 
 impl ExportRenderer {
     /// The off-screen device, or `None` when this host has no usable adapter or this build no
-    /// wgpu backend. Defaults preserve the compositor's existing selection and 24-entry cache.
+    /// wgpu backend. Defaults preserve automatic backend selection and the 24-entry cache.
     pub fn new() -> Option<Self> {
-        Self::new_with_preferences("highPerformance", 24)
+        Self::new_with_preferences("auto", "highPerformance", 24)
     }
 
-    /// Use the saved desktop GPU power preference and bounded upload-cache size. The export device
-    /// is shared process-wide and created once, so these options are captured by its first creation.
-    pub fn new_with_preferences(power_preference: &str, upload_cache_limit: usize) -> Option<Self> {
+    /// Use the saved desktop backend, power preference and bounded upload-cache size. The export
+    /// device is shared process-wide and created once, so these options are captured by its first creation.
+    pub fn new_with_preferences(backend_preference: &str, power_preference: &str, upload_cache_limit: usize) -> Option<Self> {
         // `None` is kept too: a machine without an adapter does not search again on every export
         static SHARED: std::sync::OnceLock<Option<(wgpu::Instance, wgpu::Device, wgpu::Queue)>> = std::sync::OnceLock::new();
         let preference = match power_preference {
@@ -122,7 +122,39 @@ impl ExportRenderer {
                 if wgpu::Instance::enabled_backend_features().is_empty() {
                     return None;
                 }
-                let instance = wgpu::Instance::default();
+                let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    descriptor = descriptor.with_env();
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
+                }
+                // WGPU_BACKEND remains the explicit override. Otherwise use the selected
+                // Windows/Linux backend when one was requested, or wgpu's normal automatic set.
+                if std::env::var_os("WGPU_BACKEND").is_none() {
+                    match backend_preference {
+                        "dx12" => descriptor.backends = wgpu::Backends::DX12,
+                        "vulkan" => descriptor.backends = wgpu::Backends::VULKAN,
+                        _ => {}
+                    }
+                }
+                // Like the preview window, prefer bundled Microsoft's DXC when installed beside
+                // the executable. DXC supports FilmCraft's WGSL compute shaders; legacy FXC does not.
+                #[cfg(target_os = "windows")]
+                {
+                    let bundled_dxc = std::env::current_exe()
+                        .ok()
+                        .and_then(|exe| exe.parent().map(|dir| dir.join("dxcompiler.dll")))
+                        .filter(|path| path.is_file());
+                    let shader_compiler = match bundled_dxc {
+                        Some(path) => wgpu::Dx12Compiler::DynamicDxc { dxc_path: path.to_string_lossy().into_owned() },
+                        None => wgpu::Dx12Compiler::Auto,
+                    };
+                    descriptor.backend_options.dx12.shader_compiler = shader_compiler.with_env();
+                }
+                let instance = wgpu::Instance::new(descriptor);
                 let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
                     power_preference: preference,
                     ..Default::default()
