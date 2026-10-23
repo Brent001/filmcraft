@@ -353,6 +353,49 @@ fn structure_hash(item: &TrackItem) -> u64 {
 
 const BLOCK: usize = 256;
 
+/// Call every processor with stack-backed channel slices for the common mono/stereo/5.1 layouts.
+/// This keeps the hot block loop from allocating a Vec of mutable slices every 256 samples.
+fn process_channel_block(fx: &mut [Box<dyn AudioEffect>], input: &mut [Vec<f32>], start: usize, end: usize) {
+    match input.len() {
+        1 => {
+            let [c0] = input else { unreachable!() };
+            let mut channels = [&mut c0[start..end]];
+            for effect in fx {
+                effect.process(&mut channels);
+            }
+        }
+        2 => {
+            let [c0, c1] = input else { unreachable!() };
+            let mut channels = [&mut c0[start..end], &mut c1[start..end]];
+            for effect in fx {
+                effect.process(&mut channels);
+            }
+        }
+        6 => {
+            let [c0, c1, c2, c3, c4, c5] = input else { unreachable!() };
+            let mut channels = [
+                &mut c0[start..end],
+                &mut c1[start..end],
+                &mut c2[start..end],
+                &mut c3[start..end],
+                &mut c4[start..end],
+                &mut c5[start..end],
+            ];
+            for effect in fx {
+                effect.process(&mut channels);
+            }
+        }
+        // The project renderer currently produces 1, 2 or 6 channel audio. Keep this fallback
+        // for future layouts rather than silently passing new channel counts through unchanged.
+        _ => {
+            let mut channels = input.iter_mut().map(|c| &mut c[start..end]).collect::<Vec<_>>();
+            for effect in fx {
+                effect.process(&mut channels);
+            }
+        }
+    }
+}
+
 /// Run `input` (planar, `input[c].len()` samples starting at timeline sample `in0`) through the
 /// chain, setting keyframed parameters per block.
 fn run(
@@ -365,9 +408,6 @@ fn run(
 ) {
     let n = input.first().map_or(0, Vec::len);
     let mut i = 0;
-    // The channel-slice vector is needed only while an effect is called. Reuse its allocation
-    // across the absolute-grid blocks instead of allocating a new Vec every 256 samples.
-    let mut chans: Vec<&mut [f32]> = Vec::with_capacity(input.len());
     while i < n {
         // absolute block grid: parameters update at the same samples however requests are cut
         let pos = in0 + i as i64;
@@ -378,11 +418,7 @@ fn run(
             (m.apply)(d.as_mut(), e, mt);
             d.end_parameter_update();
         }
-        chans.clear();
-        chans.extend(input.iter_mut().map(|c| &mut c[i..end]));
-        for d in chain.fx.iter_mut() {
-            d.process(&mut chans);
-        }
+        process_channel_block(&mut chain.fx, input, i, end);
         i = end;
     }
 }
