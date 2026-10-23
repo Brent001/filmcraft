@@ -1202,7 +1202,7 @@ static CATEGORIES: &[Category] = &[
                 ],
             ),
             Row::Note(
-                "Preview compositor and GPU power preference apply at the next launch. Unsupported devices continue on the CPU compositor. FilmCraft reports compositor timing, uploads and GPU/CPU transition counts; cross-platform GPU utilization percentages are not available through wgpu.",
+                "Preview compositor, GPU power preference and GPU export acceleration apply at the next launch. Unsupported devices continue on the CPU compositor. FilmCraft reports compositor submission time, uploads and GPU/CPU transition counts; cross-platform GPU utilization percentages are not available through wgpu.",
             ),
         ],
     },
