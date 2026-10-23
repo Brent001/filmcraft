@@ -508,14 +508,82 @@ impl filmcraft_export::FrameRenderer for GpuFrameRenderer {
     }
 }
 
-fn register_gpu_frame_renderer(power_preference: &str, upload_cache_entries: usize) {
-    // The export GPU device is created lazily on its first frame; keep these owned settings alive
-    // for the registry callback and apply the same tuning as the preview compositor.
-    let power_preference = power_preference.to_string();
-    filmcraft_export::register_frame_renderer(move || {
-        filmcraft_gpu::ExportRenderer::new_with_preferences(&power_preference, upload_cache_entries)
-            .map(|r| Box::new(GpuFrameRenderer(r)) as Box<dyn filmcraft_export::FrameRenderer>)
-    });
+#[derive(Clone, Debug)]
+struct GpuExportOptions {
+    enabled: bool,
+    backend_preference: String,
+    power_preference: String,
+    upload_cache_entries: usize,
+}
+
+impl Default for GpuExportOptions {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            backend_preference: "auto".into(),
+            power_preference: "highPerformance".into(),
+            upload_cache_entries: 24,
+        }
+    }
+}
+
+static GPU_EXPORT_OPTIONS: OnceLock<Mutex<GpuExportOptions>> = OnceLock::new();
+
+fn gpu_export_options() -> &'static Mutex<GpuExportOptions> {
+    GPU_EXPORT_OPTIONS.get_or_init(|| Mutex::new(GpuExportOptions::default()))
+}
+
+/// A plain function pointer is required by filmcraft-export's renderer registry. Read the current
+/// settings when the export renderer is created rather than capturing a closure at registration.
+fn gpu_frame_renderer_factory() -> Option<Box<dyn filmcraft_export::FrameRenderer>> {
+    let options = gpu_export_options().lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if !options.enabled {
+        return None;
+    }
+    filmcraft_gpu::ExportRenderer::new_with_preferences(
+        &options.backend_preference,
+        &options.power_preference,
+        options.upload_cache_entries,
+    )
+    .map(|r| Box::new(GpuFrameRenderer(r)) as Box<dyn filmcraft_export::FrameRenderer>)
+}
+
+fn backend_preference_for_mode(mode: graphics::Mode) -> &'static str {
+    match mode {
+        graphics::Mode::Default => "auto",
+        graphics::Mode::Dx12 => "dx12",
+        graphics::Mode::Vulkan => "vulkan",
+        graphics::Mode::Software => "auto",
+    }
+}
+
+fn export_backend_preference(mode: graphics::Mode, backend_override: Option<eframe::wgpu::Backends>) -> &'static str {
+    if let Some(backend) = backend_override {
+        if backend == eframe::wgpu::Backends::DX12 {
+            return "dx12";
+        }
+        if backend == eframe::wgpu::Backends::VULKAN {
+            return "vulkan";
+        }
+    }
+    backend_preference_for_mode(mode)
+}
+
+fn register_gpu_frame_renderer(
+    backend_preference: &str,
+    power_preference: &str,
+    upload_cache_entries: usize,
+    enabled: bool,
+) {
+    // The export GPU device is created lazily on its first frame. Update a shared, bounded
+    // configuration; the registry uses a non-capturing factory because it requires a fn pointer.
+    let mut options = gpu_export_options().lock().unwrap_or_else(|e| e.into_inner());
+    options.enabled = enabled;
+    options.backend_preference = backend_preference.to_string();
+    options.power_preference = power_preference.to_string();
+    options.upload_cache_entries = upload_cache_entries.clamp(8, 64);
+    drop(options);
+    filmcraft_export::register_frame_renderer(gpu_frame_renderer_factory);
 }
 
 /// Put the OS hardware video decoders in front of our own. Registered in a statement of its own:
