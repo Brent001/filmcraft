@@ -429,6 +429,18 @@ impl GpuState {
     pub fn last_presentation(&self, slot: u64) -> (Option<egui::TextureId>, Option<FrameKey>) {
         self.outputs.get(&slot).map_or((None, None), |o| (o.texture, o.last_key))
     }
+
+    /// Dimensions of monitor outputs that have completed at least one GPU composite.
+    pub fn output_sizes(&self) -> Vec<(u64, (u32, u32))> {
+        let mut sizes = self
+            .outputs
+            .iter()
+            .filter(|(_, output)| output.size.0 > 0 && output.size.1 > 0)
+            .map(|(slot, output)| (*slot, output.size))
+            .collect::<Vec<_>>();
+        sizes.sort_unstable_by_key(|(slot, _)| *slot);
+        sizes
+    }
 }
 
 /// Largest texture side a plan needs on the GPU (output and every layer).
