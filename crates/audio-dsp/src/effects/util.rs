@@ -251,7 +251,6 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod delay_line_tests {
     use super::*;
