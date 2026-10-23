@@ -256,12 +256,14 @@ fn set_if_changed(d: &mut dyn AudioEffect, id: &str, v: f32) {
 /// same id.
 fn direct(d: &mut dyn AudioEffect, e: &EffectInstance, t: Tick) {
     let Some(def) = e.def() else { return };
+    d.begin_parameter_update();
     for p in &def.params {
         let v = e.params.get(p.id).map_or_else(|| p.default.as_f64().unwrap_or(0.0), |q| q.scalar_at(t));
         // sanitise like the DSP would, so unchanged values compare equal
         let v = d.params().iter().find(|s| s.id == p.id).map_or(v as f32, |s| s.sanitize(v as f32));
         set_if_changed(d, p.id, v);
     }
+    d.end_parameter_update();
 }
 
 /// A DSP instance configured like the project effect `e` at media time `t` (for the graphical
@@ -269,7 +271,9 @@ fn direct(d: &mut dyn AudioEffect, e: &EffectInstance, t: Tick) {
 pub fn configured(e: &EffectInstance, t: Tick, sample_rate: u32) -> Option<Box<dyn AudioEffect>> {
     let m = mapping(&e.effect)?;
     let mut d = filmcraft_audio_dsp::create_effect(m.dsp, sample_rate as f32, 2)?;
+    d.begin_parameter_update();
     (m.apply)(d.as_mut(), e, t);
+    d.end_parameter_update();
     Some(d)
 }
 
