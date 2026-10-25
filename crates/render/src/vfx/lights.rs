@@ -117,10 +117,8 @@ pub fn echo_glow(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     let decay = 1.0 - fv(e, "decay", cx) / 100.0;
     let col = lin(cv(e, "color", cx));
     let context = filmcraft_media::cancel::Context::current();
-    let layers: Vec<(Image, f32)> = (0..n)
-        .into_par_iter()
-        .map(|i| context.clone().run(|| (blurred(&hi, r * spread.powi(i as i32)), decay.powi(i as i32))))
-        .collect();
+    let layers: Vec<(Image, f32)> =
+        (0..n).into_par_iter().map(|i| context.clone().run(|| (blurred(&hi, r * spread.powi(i as i32)), decay.powi(i as i32)))).collect();
     let mut acc = Image::new(img.w, img.h);
     for (l, wgt) in &layers {
         if filmcraft_media::cancel::cancelled() {
@@ -335,16 +333,16 @@ pub fn rgb_split(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
                     break;
                 }
                 let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-            let (ox, oy) = if radial {
-                let (dx, dy) = (px - c.x as f32, py - c.y as f32);
-                (dx / maxd * amt, dy / maxd * amt)
-            } else {
-                (ang.cos() * amt, ang.sin() * amt)
-            };
-            let r = src.sample_bilinear(px - ox, py - oy);
-            let g = src.get(x, y);
-            let b = src.sample_bilinear(px + ox, py + oy);
-            let o = [r[0], g[1], b[2], r[3].max(g[3]).max(b[3])];
+                let (ox, oy) = if radial {
+                    let (dx, dy) = (px - c.x as f32, py - c.y as f32);
+                    (dx / maxd * amt, dy / maxd * amt)
+                } else {
+                    (ang.cos() * amt, ang.sin() * amt)
+                };
+                let r = src.sample_bilinear(px - ox, py - oy);
+                let g = src.get(x, y);
+                let b = src.sample_bilinear(px + ox, py + oy);
+                let o = [r[0], g[1], b[2], r[3].max(g[3]).max(b[3])];
                 for k in 0..4 {
                     row[x * 4 + k] = o[k] + (g[k] - o[k]) * blend;
                 }
@@ -407,10 +405,8 @@ pub fn wonder_glow(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     let r = fv(e, "radius", cx) * cx.px_scale * 0.5;
     let inten = fv(e, "intensity", cx) / 100.0;
     let context = filmcraft_media::cancel::Context::current();
-    let parts: Vec<(Image, f32)> = [(0.25f32, 0.45f32), (1.0, 0.35), (3.0, 0.2)]
-        .par_iter()
-        .map(|&(k, wgt)| context.clone().run(|| (blurred(&hi, r * k), wgt)))
-        .collect();
+    let parts: Vec<(Image, f32)> =
+        [(0.25f32, 0.45f32), (1.0, 0.35), (3.0, 0.2)].par_iter().map(|&(k, wgt)| context.clone().run(|| (blurred(&hi, r * k), wgt))).collect();
     let mut acc = Image::new(img.w, img.h);
     for (p, wgt) in &parts {
         if filmcraft_media::cancel::cancelled() {
