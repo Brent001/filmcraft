@@ -14,17 +14,47 @@ fn blurred(src: &Image, sigma: f32) -> Image {
 
 /// Add `light` (premultiplied linear) to `img`: Add or Screen.
 fn add_image(img: &mut Image, light: &Image, gain: [f32; 3], screen: bool) {
-    img.px.par_chunks_mut(4).zip(light.px.par_chunks(4)).for_each(|(p, l)| {
-        let add = [l[0] * gain[0], l[1] * gain[1], l[2] * gain[2]];
-        if screen {
-            let a = [add[0].min(1.0), add[1].min(1.0), add[2].min(1.0)];
-            for k in 0..3 {
-                p[k] = p[k] + a[k] - p[k].min(1.0) * a[k];
+    let w = img.w;
+    let context = filmcraft_media::cancel::Context::current();
+    img.px.par_chunks_mut(w * 4).zip(light.px.par_chunks(w * 4)).for_each(|(ir, lr)| {
+        context.clone().run(|| {
+            if filmcraft_media::cancel::cancelled() {
+                return;
             }
-            p[3] = p[3] + (1.0 - p[3]) * a[0].max(a[1]).max(a[2]);
-        } else {
-            add_light(p, add);
-        }
+            for (i, (p, l)) in ir.chunks_mut(4).zip(lr.chunks(4)).enumerate() {
+                if i % 64 == 0 && filmcraft_media::cancel::cancelled() {
+                    break;
+                }
+                let add = [l[0] * gain[0], l[1] * gain[1], l[2] * gain[2]];
+                if screen {
+                    let a = [add[0].min(1.0), add[1].min(1.0), add[2].min(1.0)];
+                    for k in 0..3 {
+                        p[k] = p[k] + a[k] - p[k].min(1.0) * a[k];
+                    }
+                    p[3] = p[3] + (1.0 - p[3]) * a[0].max(a[1]).max(a[2]);
+                } else {
+                    add_light(p, add);
+                }
+            }
+        });
+    });
+}
+
+fn accumulate_weighted(dst: &mut Image, src: &Image, weight: f32) {
+    let w = dst.w;
+    let context = filmcraft_media::cancel::Context::current();
+    dst.px.par_chunks_mut(w * 4).zip(src.px.par_chunks(w * 4)).for_each(|(dr, sr)| {
+        context.clone().run(|| {
+            if filmcraft_media::cancel::cancelled() {
+                return;
+            }
+            for (i, (d, s)) in dr.iter_mut().zip(sr).enumerate() {
+                if i % 256 == 0 && filmcraft_media::cancel::cancelled() {
+                    break;
+                }
+                *d += *s * weight;
+            }
+        });
     });
 }
 
@@ -32,24 +62,48 @@ fn saturate_image(img: &mut Image, sat: f32) {
     if (sat - 1.0).abs() < 1e-4 {
         return;
     }
-    img.px.par_chunks_mut(4).for_each(|p| {
-        let l = luma([p[0], p[1], p[2]]);
-        for v in &mut p[..3] {
-            *v = (l + (*v - l) * sat).max(0.0);
-        }
+    let w = img.w;
+    let context = filmcraft_media::cancel::Context::current();
+    img.px.par_chunks_mut(w * 4).for_each(|row| {
+        context.clone().run(|| {
+            if filmcraft_media::cancel::cancelled() {
+                return;
+            }
+            for (i, p) in row.chunks_mut(4).enumerate() {
+                if i % 64 == 0 && filmcraft_media::cancel::cancelled() {
+                    break;
+                }
+                let l = luma([p[0], p[1], p[2]]);
+                for v in &mut p[..3] {
+                    *v = (l + (*v - l) * sat).max(0.0);
+                }
+            }
+        });
     });
 }
 
 /// Replace the hue of a light buffer with `c` (keeping its luminance), by `k`.
-fn tint(img: &mut Image, c: [f32; 3], k: f32) {
+fn tint(img: &mut Image, tint_color: [f32; 3], k: f32) {
     if k <= 0.0 {
         return;
     }
-    img.px.par_chunks_mut(4).for_each(|p| {
-        let l = luma([p[0], p[1], p[2]]);
-        for i in 0..3 {
-            p[i] += (l * c[i] * 1.5 - p[i]) * k;
-        }
+    let w = img.w;
+    let context = filmcraft_media::cancel::Context::current();
+    img.px.par_chunks_mut(w * 4).for_each(|row| {
+        context.clone().run(|| {
+            if filmcraft_media::cancel::cancelled() {
+                return;
+            }
+            for (i, p) in row.chunks_mut(4).enumerate() {
+                if i % 64 == 0 && filmcraft_media::cancel::cancelled() {
+                    break;
+                }
+                let l = luma([p[0], p[1], p[2]]);
+                for channel in 0..3 {
+                    p[channel] += (l * tint_color[channel] * 1.5 - p[channel]) * k;
+                }
+            }
+        });
     });
 }
 
@@ -62,10 +116,17 @@ pub fn echo_glow(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     let inten = fv(e, "intensity", cx) / 100.0;
     let decay = 1.0 - fv(e, "decay", cx) / 100.0;
     let col = lin(cv(e, "color", cx));
-    let layers: Vec<(Image, f32)> = (0..n).into_par_iter().map(|i| (blurred(&hi, r * spread.powi(i as i32)), decay.powi(i as i32))).collect();
+    let context = filmcraft_media::cancel::Context::current();
+    let layers: Vec<(Image, f32)> = (0..n)
+        .into_par_iter()
+        .map(|i| context.clone().run(|| (blurred(&hi, r * spread.powi(i as i32)), decay.powi(i as i32))))
+        .collect();
     let mut acc = Image::new(img.w, img.h);
     for (l, wgt) in &layers {
-        acc.px.par_iter_mut().zip(l.px.par_iter()).for_each(|(a, b)| *a += b * wgt);
+        if filmcraft_media::cancel::cancelled() {
+            return;
+        }
+        accumulate_weighted(&mut acc, l, *wgt);
     }
     let norm = inten / layers.iter().map(|l| l.1).sum::<f32>().max(1e-6) * 2.0;
     tint(&mut acc, col, 1.0);
@@ -76,16 +137,25 @@ pub fn echo_glow(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
 fn edges(img: &Image) -> Vec<f32> {
     let w = img.w;
     let mut out = vec![0.0f32; img.w * img.h];
+    let context = filmcraft_media::cancel::Context::current();
     out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
-        for (x, o) in row.iter_mut().enumerate() {
-            let l = |dx: isize, dy: isize| {
-                let p = img.get_clamped(x as isize + dx, y as isize + dy);
-                filmcraft_color::linear_to_srgb(luma([p[0], p[1], p[2]]).clamp(0.0, 1.0)) * p[3].min(1.0) + 0.0
-            };
-            let gx = l(1, -1) + 2.0 * l(1, 0) + l(1, 1) - l(-1, -1) - 2.0 * l(-1, 0) - l(-1, 1);
-            let gy = l(-1, 1) + 2.0 * l(0, 1) + l(1, 1) - l(-1, -1) - 2.0 * l(0, -1) - l(1, -1);
-            *o = (gx * gx + gy * gy).sqrt() / 4.0;
-        }
+        context.clone().run(|| {
+            if filmcraft_media::cancel::cancelled() {
+                return;
+            }
+            for (x, o) in row.iter_mut().enumerate() {
+                if x % 64 == 0 && filmcraft_media::cancel::cancelled() {
+                    break;
+                }
+                let l = |dx: isize, dy: isize| {
+                    let p = img.get_clamped(x as isize + dx, y as isize + dy);
+                    filmcraft_color::linear_to_srgb(luma([p[0], p[1], p[2]]).clamp(0.0, 1.0)) * p[3].min(1.0) + 0.0
+                };
+                let gx = l(1, -1) + 2.0 * l(1, 0) + l(1, 1) - l(-1, -1) - 2.0 * l(-1, 0) - l(-1, 1);
+                let gy = l(-1, 1) + 2.0 * l(0, 1) + l(1, 1) - l(-1, -1) - 2.0 * l(0, -1) - l(1, -1);
+                *o = (gx * gx + gy * gy).sqrt() / 4.0;
+            }
+        });
     });
     out
 }
@@ -104,9 +174,22 @@ pub fn edge_glow(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     let core = m.clone();
     let halo = blur_plane(&m, img.w, img.h, r);
     let mut light = Image::new(img.w, img.h);
-    light.px.par_chunks_mut(4).enumerate().for_each(|(i, p)| {
-        let v = (core[i] * 0.6 + halo[i] * 1.6) * inten;
-        p.copy_from_slice(&[col[0] * v, col[1] * v, col[2] * v, v.min(1.0)]);
+    let w = img.w;
+    let context = filmcraft_media::cancel::Context::current();
+    light.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
+        context.clone().run(|| {
+            if filmcraft_media::cancel::cancelled() {
+                return;
+            }
+            for (x, p) in row.chunks_mut(4).enumerate() {
+                if x % 64 == 0 && filmcraft_media::cancel::cancelled() {
+                    break;
+                }
+                let i = y * w + x;
+                let v = (core[i] * 0.6 + halo[i] * 1.6) * inten;
+                p.copy_from_slice(&[col[0] * v, col[1] * v, col[2] * v, v.min(1.0)]);
+            }
+        });
     });
     if bv(e, "only") {
         *img = Image::new(img.w, img.h);
@@ -124,18 +207,45 @@ fn streak(src: &Image, dir: (f32, f32), len: f32) -> Image {
         let k = a.powf(n);
         let (dx, dy) = (dir.0 * n, dir.1 * n);
         let w = s.w;
+        let context = filmcraft_media::cancel::Context::current();
         s.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
-            for x in 0..w {
-                let q = prev.sample_bilinear(x as f32 + 0.5 - dx, y as f32 + 0.5 - dy);
-                for c in 0..4 {
-                    row[x * 4 + c] += q[c] * k;
+            context.clone().run(|| {
+                if filmcraft_media::cancel::cancelled() {
+                    return;
                 }
-            }
+                for x in 0..w {
+                    if x % 64 == 0 && filmcraft_media::cancel::cancelled() {
+                        break;
+                    }
+                    let q = prev.sample_bilinear(x as f32 + 0.5 - dx, y as f32 + 0.5 - dy);
+                    for c in 0..4 {
+                        row[x * 4 + c] += q[c] * k;
+                    }
+                }
+            });
         });
+        if filmcraft_media::cancel::cancelled() {
+            break;
+        }
         n *= 2.0;
     }
-    let norm = 1.0 - a;
-    s.px.par_iter_mut().for_each(|v| *v *= norm);
+    if !filmcraft_media::cancel::cancelled() {
+        let norm = 1.0 - a;
+        let context = filmcraft_media::cancel::Context::current();
+        s.px.par_chunks_mut(s.w * 4).for_each(|row| {
+            context.clone().run(|| {
+                if filmcraft_media::cancel::cancelled() {
+                    return;
+                }
+                for (i, v) in row.iter_mut().enumerate() {
+                    if i % 256 == 0 && filmcraft_media::cancel::cancelled() {
+                        break;
+                    }
+                    *v *= norm;
+                }
+            });
+        });
+    }
     s
 }
 
@@ -148,16 +258,22 @@ pub fn glint(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     let inten = fv(e, "intensity", cx) / 100.0 * 3.0;
     let col = lin(cv(e, "color", cx));
     let colorize = fv(e, "colorize", cx) / 100.0;
+    let context = filmcraft_media::cancel::Context::current();
     let parts: Vec<Image> = (0..rays)
         .into_par_iter()
         .map(|i| {
-            let a = rot + std::f32::consts::TAU * i as f32 / rays as f32;
-            streak(&hi, (a.cos(), a.sin()), len * 0.35)
+            context.clone().run(|| {
+                let a = rot + std::f32::consts::TAU * i as f32 / rays as f32;
+                streak(&hi, (a.cos(), a.sin()), len * 0.35)
+            })
         })
         .collect();
     let mut acc = Image::new(img.w, img.h);
     for p in &parts {
-        acc.px.par_iter_mut().zip(p.px.par_iter()).for_each(|(a, b)| *a += b);
+        if filmcraft_media::cancel::cancelled() {
+            return;
+        }
+        accumulate_weighted(&mut acc, p, 1.0);
     }
     tint(&mut acc, col, colorize);
     add_image(img, &acc, [inten * col[0].max(0.2), inten * col[1].max(0.2), inten * col[2].max(0.2)], false);
@@ -208,9 +324,17 @@ pub fn rgb_split(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     let maxd = ((img.w as f64).hypot(img.h as f64) / 2.0) as f32;
     let src = img.clone();
     let w = img.w;
+    let context = filmcraft_media::cancel::Context::current();
     img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
-        for x in 0..w {
-            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+        context.clone().run(|| {
+            if filmcraft_media::cancel::cancelled() {
+                return;
+            }
+            for x in 0..w {
+                if x % 64 == 0 && filmcraft_media::cancel::cancelled() {
+                    break;
+                }
+                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
             let (ox, oy) = if radial {
                 let (dx, dy) = (px - c.x as f32, py - c.y as f32);
                 (dx / maxd * amt, dy / maxd * amt)
@@ -221,10 +345,11 @@ pub fn rgb_split(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
             let g = src.get(x, y);
             let b = src.sample_bilinear(px + ox, py + oy);
             let o = [r[0], g[1], b[2], r[3].max(g[3]).max(b[3])];
-            for k in 0..4 {
-                row[x * 4 + k] = o[k] + (g[k] - o[k]) * blend;
+                for k in 0..4 {
+                    row[x * 4 + k] = o[k] + (g[k] - o[k]) * blend;
+                }
             }
-        }
+        });
     });
 }
 
@@ -281,10 +406,17 @@ pub fn wonder_glow(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     }
     let r = fv(e, "radius", cx) * cx.px_scale * 0.5;
     let inten = fv(e, "intensity", cx) / 100.0;
-    let parts: Vec<(Image, f32)> = [(0.25f32, 0.45f32), (1.0, 0.35), (3.0, 0.2)].par_iter().map(|&(k, wgt)| (blurred(&hi, r * k), wgt)).collect();
+    let context = filmcraft_media::cancel::Context::current();
+    let parts: Vec<(Image, f32)> = [(0.25f32, 0.45f32), (1.0, 0.35), (3.0, 0.2)]
+        .par_iter()
+        .map(|&(k, wgt)| context.clone().run(|| (blurred(&hi, r * k), wgt)))
+        .collect();
     let mut acc = Image::new(img.w, img.h);
     for (p, wgt) in &parts {
-        acc.px.par_iter_mut().zip(p.px.par_iter()).for_each(|(a, b)| *a += b * wgt);
+        if filmcraft_media::cancel::cancelled() {
+            return;
+        }
+        accumulate_weighted(&mut acc, p, *wgt);
     }
     add_image(img, &acc, [inten * 1.5; 3], chv(e, "mode") == 1);
 }
