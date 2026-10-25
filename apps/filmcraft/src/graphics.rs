@@ -691,7 +691,7 @@ mod tests {
             "{",
             "null",
             "[]",
-            r#"{"mode":"vulkan","failures":1}"#,
+            r#"{"mode":"not-a-backend","failures":1}"#,
             r#"{"failures":1}"#,
             r#"{"mode":1,"failures":1}"#,
             r#"{"mode":"dx12","failures":"one"}"#,
