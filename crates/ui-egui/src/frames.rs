@@ -448,7 +448,7 @@ impl FrameServer {
     /// Keep about half as many frame jobs in flight, leaving room for the shared pixel pool, UI,
     /// audio and hardware-decoder callbacks.
     pub fn default_workers() -> usize {
-        frame_worker_count(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(3))
+        Self::frame_worker_count(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(3))
     }
 
     fn frame_worker_count(logical_cpus: usize) -> usize {
