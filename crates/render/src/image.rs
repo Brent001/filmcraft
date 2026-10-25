@@ -116,8 +116,11 @@ impl Image {
                         break;
                     }
                     let px = x as f64 + 0.5;
-                    let (u, v) =
-                        if axis_aligned { (inv.a * px + inv.e, inv.d * py + inv.f) } else { (inv.a * px + inv.c * py + inv.e, inv.b * px + inv.d * py + inv.f) };
+                    let (u, v) = if axis_aligned {
+                        (inv.a * px + inv.e, inv.d * py + inv.f)
+                    } else {
+                        (inv.a * px + inv.c * py + inv.e, inv.b * px + inv.d * py + inv.f)
+                    };
                     if u < -1.0 || v < -1.0 || u > self.w as f64 + 1.0 || v > self.h as f64 + 1.0 {
                         continue;
                     }
