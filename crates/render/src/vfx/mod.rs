@@ -382,17 +382,29 @@ pub(crate) fn blur_plane(plane: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f
 /// Bright parts of an image above `threshold` (display luma), premultiplied linear, for glows.
 pub(crate) fn highlights(img: &Image, threshold: f32, soft: f32) -> Image {
     let mut out = img.clone();
-    out.px.par_chunks_mut(4).for_each(|p| {
-        let a = p[3];
-        if a <= 1e-6 {
-            p.fill(0.0);
-            return;
-        }
-        let l = crate::effects::enc([p[0] / a, p[1] / a, p[2] / a]);
-        let k = smoothstep(threshold, threshold + soft.max(1e-3), luma(l));
-        for v in p.iter_mut() {
-            *v *= k;
-        }
+    let w = out.w;
+    let context = filmcraft_media::cancel::Context::current();
+    out.px.par_chunks_mut(w * 4).for_each(|row| {
+        context.clone().run(|| {
+            if filmcraft_media::cancel::cancelled() {
+                return;
+            }
+            for (i, p) in row.chunks_mut(4).enumerate() {
+                if i % 64 == 0 && filmcraft_media::cancel::cancelled() {
+                    break;
+                }
+                let a = p[3];
+                if a <= 1e-6 {
+                    p.fill(0.0);
+                    continue;
+                }
+                let l = crate::effects::enc([p[0] / a, p[1] / a, p[2] / a]);
+                let k = smoothstep(threshold, threshold + soft.max(1e-3), luma(l));
+                for v in p.iter_mut() {
+                    *v *= k;
+                }
+            }
+        });
     });
     out
 }
@@ -400,12 +412,21 @@ pub(crate) fn highlights(img: &Image, threshold: f32, soft: f32) -> Image {
 /// Fill an image from a per-pixel premultiplied colour function (x, y at pixel centres).
 pub(crate) fn generate(img: &mut Image, f: impl Fn(f32, f32, [f32; 4]) -> [f32; 4] + Sync) {
     let w = img.w;
+    let context = filmcraft_media::cancel::Context::current();
     img.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
-        for x in 0..w {
-            let p = &mut row[x * 4..x * 4 + 4];
-            let o = f(x as f32 + 0.5, y as f32 + 0.5, [p[0], p[1], p[2], p[3]]);
-            p.copy_from_slice(&o);
-        }
+        context.clone().run(|| {
+            if filmcraft_media::cancel::cancelled() {
+                return;
+            }
+            for x in 0..w {
+                if x % 64 == 0 && filmcraft_media::cancel::cancelled() {
+                    break;
+                }
+                let p = &mut row[x * 4..x * 4 + 4];
+                let o = f(x as f32 + 0.5, y as f32 + 0.5, [p[0], p[1], p[2], p[3]]);
+                p.copy_from_slice(&o);
+            }
+        });
     });
 }
 
