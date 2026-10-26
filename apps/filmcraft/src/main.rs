@@ -272,8 +272,9 @@ fn app_creator(
     let Launch { control_port, control_input_only, files, demo, startup_flag, recover, data_dir, graphics: _ } = launch;
     Box::new(move |cc| {
         created.store(true, Ordering::Relaxed);
-        // A fallback graphics mode says so in the window, with a button back to the default.
-        let notice = graphics.degraded().then(|| {
+        // Only notify for an automatic recovery or an in-process fallback. A backend the
+        // user explicitly selected (for example DX12 in Settings) is not a recovery warning.
+        let notice = graphics.should_show_recovery_notice().then(|| {
             let start = graphics.clone();
             filmcraft_ui_egui::graphics_notice::GraphicsNotice::new(graphics.mode().label(), Box::new(move || start.reset_to_default()))
         });
