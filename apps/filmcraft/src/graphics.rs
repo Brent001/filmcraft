@@ -878,7 +878,18 @@ mod tests {
         assert_eq!(explicitly_selected.mode(), last);
         assert!(!explicitly_selected.should_show_recovery_notice(), "a user-selected backend is not an automatic recovery event");
         explicitly_selected.confirm();
-        assert_eq!(launch(&dir, 74, NOW + 240).mode(), last);
+        let next_launch = launch(&dir, 74, NOW + 240);
+        assert_eq!(next_launch.mode(), last);
+        assert!(!next_launch.should_show_recovery_notice());
+
+        // Explicitly selecting DX12 in Settings is a user choice, not an automatic recovery.
+        if LADDER.contains(&Mode::Dx12) {
+            let dx12 = GraphicsStart::begin_at(Some(&dir), false, Some(Mode::Dx12), NOW + 300, 75);
+            assert_eq!(dx12.mode(), Mode::Dx12);
+            assert!(!dx12.should_show_recovery_notice());
+            dx12.confirm();
+        }
+
         // a mode this platform has not starts with the first one
         if !LADDER.contains(&Mode::Dx12) {
             assert_eq!(GraphicsStart::begin_at(Some(&dir), false, Some(Mode::Dx12), NOW + 300, 75).mode(), Mode::Default);
