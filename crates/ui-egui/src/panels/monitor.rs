@@ -196,13 +196,22 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
             (true, Target::Item(i)) => Target::ItemPlan(i),
             (_, t) => t,
         };
-        // Draft decoding (opt-in): only while playing at 1/2 resolution or lower.
-        let draft = crate::frames::draft_playback(playing, scale, app.session.prefs.playback.draft_decode);
+        let speed = if which == Which::Program { app.playback.speed } else { app.source_playback.clock.speed };
+        // Keep a separate cache for draft-quality frames. Opt-in draft decoding is available at
+        // half resolution; when measured render throughput falls behind, automatically use the
+        // cheaper CPU-effect fallback path during playback (including at full monitor resolution).
+        let draft = crate::frames::playback_draft_mode(
+            playing,
+            scale,
+            app.session.prefs.playback.draft_decode,
+            app.frames.render_cost(),
+            rate.as_f64(),
+            app.frames.workers(),
+        );
         let key = FrameKey { target, frame, size: size_key, revision: rev, draft };
         let project = app.session.project.clone();
         if playing {
             let preroll = which == Which::Program && app.playback.preroll.is_some();
-            let speed = if which == Which::Program { app.playback.speed } else { app.source_playback.clock.speed };
             app.frames.schedule_playback(key, rate, scale, &project, speed, preroll);
             if preroll {
                 app.playback.preroll_ready = app.frames.preroll_ready(key, app.playback.speed, rate.frame_at(duration) - 1);
