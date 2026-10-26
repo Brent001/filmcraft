@@ -518,11 +518,26 @@ fn push_item(
             return;
         }
     }
-    // CPU-rendered layer (standard effects): drawn by the GPU as a pre-rendered canvas image.
+    // Effects without a GPU implementation are rendered by the CPU. When playback is behind,
+    // the scheduler uses a separate draft cache key; render these fallback layers at half the
+    // monitor scale and upscale them to the monitor canvas. Paused frames and exports keep the
+    // full-resolution effect path.
     let tc = filmcraft_time::format_time(t, seq.settings.frame_rate, seq.settings.drop_frame, filmcraft_time::TimeDisplay::Timecode, 48_000);
-    if let Some((img, op2, _)) = crate::item_layer(project, seq, item, t, opts, sources, &tc) {
+    let cpu_scale = cpu_effect_preview_scale(opts.scale, filmcraft_media::cancel::draft());
+    let cpu_opts = RenderOptions { scale: cpu_scale, ..opts };
+    if let Some((mut img, op2, _)) = crate::item_layer(project, seq, item, t, cpu_opts, sources, &tc) {
+        let (target_w, target_h) = output_size(seq, opts.scale);
+        if img.w != target_w || img.h != target_h {
+            let sx = target_w as f64 / img.w.max(1) as f64;
+            let sy = target_h as f64 / img.h.max(1) as f64;
+            img = img.transformed(target_w, target_h, &Affine::scale(sx, sy));
+        }
         out.push(PlanLayer::new(cpu_frame(img), Affine::IDENTITY, op2 * extra_opacity, bl));
     }
+}
+
+fn cpu_effect_preview_scale(scale: f32, draft: bool) -> f32 {
+    if draft && scale.is_finite() && scale > 0.0 { scale * 0.5 } else { scale }
 }
 
 fn near_identity(m: &Affine) -> bool {
@@ -604,6 +619,15 @@ fn execute_layers(canvas: &mut crate::Image, layers: &[PlanLayer]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpu_only_effects_use_lower_resolution_only_for_draft_quality_frames() {
+        assert_eq!(cpu_effect_preview_scale(0.5, true), 0.25);
+        assert_eq!(cpu_effect_preview_scale(0.25, true), 0.125);
+        assert_eq!(cpu_effect_preview_scale(0.5, false), 0.5);
+        assert_eq!(cpu_effect_preview_scale(1.0, true), 0.5);
+        assert!(cpu_effect_preview_scale(f32::NAN, true).is_nan());
+    }
 
     #[test]
     fn flattening_an_operation_preserves_its_picture() {

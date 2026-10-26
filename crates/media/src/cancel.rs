@@ -10,9 +10,10 @@
 //! (playback has passed them): a decoder that has to decode forward to the frame may skip
 //! pictures that only produce late frames and that nothing else references.
 //!
-//! [`with_draft`] marks reduced-resolution playback (opt-in): decoders may take spec-safe
-//! shortcuts that only change pictures nothing references (H.264: no deblocking of non-reference
-//! pictures). Never set for exports, renders or a frame shown while paused.
+//! [`with_draft`] marks a draft-quality playback frame. The user may opt in at reduced
+//! resolution; the frame scheduler can also enable this mode when measured render cost falls behind
+//! real time. Decoders may take spec-safe shortcuts that only change pictures nothing references
+//! (H.264: no deblocking of non-reference pictures). Never set for exports, renders or paused frames.
 //!
 //! [`with_background`] marks work nobody waits on interactively (thumbnails of the Project panel,
 //! the Media Browser and the timeline): sources should not keep expensive state, such as a

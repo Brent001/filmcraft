@@ -341,7 +341,8 @@ pub const GPU_EFFECTS: &[&str] = &[
     "strobe",
     "noise",
     "color_key",
-    "ultra_key",
+    // Ultra Key still diverges from the CPU reference on the golden scene.
+    // Keep it on CPU until its matte/spill math reaches parity.
     "luma_key",
     "four_color_gradient",
     "ramp",

@@ -196,13 +196,27 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
             (true, Target::Item(i)) => Target::ItemPlan(i),
             (_, t) => t,
         };
-        // Draft decoding (opt-in): only while playing at 1/2 resolution or lower.
-        let draft = crate::frames::draft_playback(playing, scale, app.session.prefs.playback.draft_decode);
+        let speed = if which == Which::Program { app.playback.speed } else { app.source_playback.clock.speed };
+        // Keep adaptive frames separate from full-quality paused frames. Manual draft decoding
+        // remains opt-in; a slow playback estimate can independently select the cheaper CPU-effect
+        // fallback path. Hysteresis prevents switching quality back and forth frame by frame.
+        let draft_id = egui::Id::new(("monitor-adaptive-draft", prefix));
+        let was_adaptive = ctx.data(|d| d.get_temp::<bool>(draft_id)).unwrap_or(false);
+        let enabled = app.session.prefs.playback.draft_decode;
+        let render_cost = app.frames.render_cost();
+        let manual_draft = crate::frames::draft_playback(playing, scale, enabled);
+        let draft = if use_gpu { crate::frames::playback_draft_mode(playing, scale, enabled, render_cost, rate.as_f64(), was_adaptive) } else { manual_draft };
+        ctx.data_mut(|d| {
+            if use_gpu && playing && !manual_draft && draft {
+                d.insert_temp(draft_id, true);
+            } else {
+                d.remove::<bool>(draft_id);
+            }
+        });
         let key = FrameKey { target, frame, size: size_key, revision: rev, draft };
         let project = app.session.project.clone();
         if playing {
             let preroll = which == Which::Program && app.playback.preroll.is_some();
-            let speed = if which == Which::Program { app.playback.speed } else { app.source_playback.clock.speed };
             app.frames.schedule_playback(key, rate, scale, &project, speed, preroll);
             if preroll {
                 app.playback.preroll_ready = app.frames.preroll_ready(key, app.playback.speed, rate.frame_at(duration) - 1);

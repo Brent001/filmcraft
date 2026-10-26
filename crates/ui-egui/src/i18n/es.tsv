@@ -3617,3 +3617,26 @@
 	Open a sequence to search its graphics	Abre una secuencia para buscar en sus gráficos
 	No text graphics in this sequence. Add text with the Type tool.	Esta secuencia no tiene gráficos con texto. Añade texto con la herramienta Texto.
 	No matching text.	Ningún texto coincide.
+
+# GPU / Control settings added for current settings registry.
+	Acceleration	Aceleración
+	Automatic (GPU, with CPU fallback)	Automático (GPU, con alternativa por CPU)
+	Automatic (system default)	Automático (valor predeterminado del sistema)
+	CPU only	Solo CPU
+	Control & MCP	Control y MCP
+	Enable MCP / Control Server on Startup	Activar MCP / servidor de control al iniciar
+	Enabled on the next launch. The server listens only on 127.0.0.1 and requires a private 64-character token. FilmCraft creates a per-user token file automatically; do not share it.	Se activará en el próximo inicio. El servidor solo escucha en 127.0.0.1 y requiere un token privado de 64 caracteres. FilmCraft crea automáticamente un archivo de token por usuario; no lo compartas.
+	GPU & Performance	GPU y rendimiento
+	GPU backend	Motor de GPU
+	GPU backend, preview compositor, power preference, upload-cache limit and GPU export acceleration apply at the next launch. Windows supports Automatic, Vulkan or DirectX 12; Linux supports Automatic or Vulkan. DX12 selects Microsoft's DXC shader compiler when the bundled runtime is present. Failed startup still uses FilmCraft's graphics recovery and CPU fallback.	El motor de GPU, el compositor de previsualización, la preferencia de consumo, el límite de la caché de carga y la aceleración de exportación por GPU se aplican al próximo inicio. Windows admite Automático, Vulkan o DirectX 12; Linux admite Automático o Vulkan. DX12 selecciona el compilador de sombreadores DXC de Microsoft cuando está disponible el entorno de ejecución incluido. Si el inicio falla, FilmCraft sigue usando la recuperación gráfica y el procesamiento por CPU.
+	GPU power preference	Preferencia de consumo de GPU
+	GPU upload-cache entries	Entradas de caché de carga de GPU
+	GPU-accelerated export	Exportación acelerada por GPU
+	High performance	Alto rendimiento
+	Low power	Bajo consumo
+	MCP / Control Server Port	Puerto del servidor MCP / control
+	Preview compositor	Compositor de previsualización
+	System default	Valor predeterminado del sistema
+	Vulkan	Vulkan
+	entries	entradas
+	port	puerto
