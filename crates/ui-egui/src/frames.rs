@@ -60,10 +60,10 @@ pub struct FrameKey {
     /// Output width in pixels (thumbnails) or scale ×1000 (monitors).
     pub size: u32,
     pub revision: u64,
-    /// Draft decoding (reduced-resolution playback with Settings ▸ Playback ▸ Draft decoding):
-    /// sources may decode approximate non-reference pictures
-    /// ([`filmcraft_media::cancel::with_draft`]). Draft frames have their own keys, so a paused
-    /// monitor, an export or a render never shows one.
+    /// Draft/adaptive playback frame. In addition to the opt-in reduced-resolution decoder mode,
+    /// playback may use this separate key when rendering falls behind and CPU effect fallback is
+    /// downscaled. Sources can also skip filtering on non-reference pictures. Paused renders and
+    /// exports use a separate full-quality key.
     pub draft: bool,
 }
 
@@ -73,17 +73,21 @@ pub fn draft_playback(playing: bool, scale: f32, enabled: bool) -> bool {
 }
 
 /// Whether playback should use a separate draft-quality cache entry. The user preference remains
-/// opt-in, but if measured render cost means the frame workers cannot sustain real time, adapt the
-/// playing monitor to a cheaper render path. Paused frames always use their separate full-quality key.
-pub fn playback_draft_mode(playing: bool, scale: f32, enabled: bool, render_cost: f64, fps: f64, workers: usize) -> bool {
+/// opt-in, but if a frame's estimated render time exceeds its display interval, adapt the monitor
+/// to the cheaper CPU-effect fallback path. Hysteresis keeps the quality from flipping every frame:
+/// adaptive mode starts above one frame interval and persists until work is below one fifth.
+pub fn playback_draft_mode(playing: bool, scale: f32, enabled: bool, render_cost: f64, fps: f64, was_adaptive: bool) -> bool {
     if !playing {
         return false;
     }
     if draft_playback(playing, scale, enabled) {
         return true;
     }
-    let (lead, stride) = playback_plan(render_cost, fps, workers);
-    lead > 1 || stride > 1
+    if !render_cost.is_finite() || !fps.is_finite() || render_cost < 0.0 || fps <= 0.0 {
+        return false;
+    }
+    let load = render_cost * fps;
+    if was_adaptive { load > 0.2 } else { load > 1.0 }
 }
 
 pub struct Rgba {
@@ -1053,7 +1057,7 @@ mod tests {
     }
 
     #[test]
-    fn playback_draft_is_opt_in_or_automatically_enabled_when_workers_fall_behind() {
+    fn playback_draft_is_opt_in_or_adapts_with_hysteresis_when_rendering_falls_behind() {
         use super::{draft_playback, playback_draft_mode};
         assert!(draft_playback(true, 0.5, true) && draft_playback(true, 0.25, true));
         assert!(!draft_playback(true, 1.0, true), "manual draft decoding is limited to half resolution");
@@ -1061,10 +1065,11 @@ mod tests {
         assert!(!draft_playback(true, 0.5, false), "manual draft decoding stays off unless enabled");
         assert!(!filmcraft_engine::autosave::Preferences::default().playback.draft_decode, "off by default");
 
-        assert!(!playback_draft_mode(false, 1.0, false, 0.5, 24.0, 6), "paused frames remain full quality");
-        assert!(!playback_draft_mode(true, 1.0, false, 0.1, 24.0, 6), "fast renders keep full quality");
-        assert!(playback_draft_mode(true, 1.0, false, 0.5, 24.0, 6), "slow renders adapt at full monitor resolution");
-        assert!(playback_draft_mode(true, 0.5, false, 0.5, 24.0, 6), "stalled half-resolution playback also adapts");
+        assert!(!playback_draft_mode(false, 1.0, false, 0.5, 24.0, false), "paused frames remain full quality");
+        assert!(!playback_draft_mode(true, 1.0, false, 0.02, 24.0, false), "fast renders keep full quality");
+        assert!(playback_draft_mode(true, 1.0, false, 0.5, 24.0, false), "slow renders adapt at full monitor resolution");
+        assert!(playback_draft_mode(true, 1.0, false, 0.1, 24.0, true), "stay in adaptive mode until safely below budget");
+        assert!(!playback_draft_mode(true, 1.0, false, 0.005, 24.0, true), "exit adaptive mode when work is fast");
     }
 
     #[test]
