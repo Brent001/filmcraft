@@ -518,10 +518,10 @@ fn push_item(
             return;
         }
     }
-    // Effects without a GPU implementation are rendered by the CPU. During draft playback,
-    // render those fallback layers at half the monitor scale, then upscale the completed image
-    // to the monitor canvas. This is deliberately playback-only: paused frames, exports, and
-    // full-quality renders keep the original resolution and exact effect path.
+    // Effects without a GPU implementation are rendered by the CPU. When playback is behind,
+    // the scheduler uses a separate draft cache key; render these fallback layers at half the
+    // monitor scale and upscale them to the monitor canvas. Paused frames and exports keep the
+    // full-resolution effect path.
     let tc = filmcraft_time::format_time(t, seq.settings.frame_rate, seq.settings.drop_frame, filmcraft_time::TimeDisplay::Timecode, 48_000);
     let cpu_scale = cpu_effect_preview_scale(opts.scale, filmcraft_media::cancel::draft());
     let cpu_opts = RenderOptions { scale: cpu_scale, ..opts };
@@ -621,13 +621,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cpu_only_effects_use_lower_resolution_only_during_draft_playback() {
+    fn cpu_only_effects_use_lower_resolution_only_for_draft_quality_frames() {
         assert_eq!(cpu_effect_preview_scale(0.5, true), 0.25);
         assert_eq!(cpu_effect_preview_scale(0.25, true), 0.125);
         assert_eq!(cpu_effect_preview_scale(0.5, false), 0.5);
         assert_eq!(cpu_effect_preview_scale(1.0, true), 0.5);
-        assert_eq!(cpu_effect_preview_scale(0.5, true), 0.25);
-        assert_eq!(cpu_effect_preview_scale(f32::NAN, true).is_nan(), true);
+        assert!(cpu_effect_preview_scale(f32::NAN, true).is_nan());
     }
 
     #[test]
