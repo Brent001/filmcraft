@@ -67,10 +67,23 @@ pub struct FrameKey {
     pub draft: bool,
 }
 
-/// Whether a monitor frame is requested with draft decoding ([`FrameKey::draft`]): only while
-/// playing, at 1/2 resolution or lower, with the preference on.
+/// User-requested draft decoding: only while playing, at 1/2 resolution or lower.
 pub fn draft_playback(playing: bool, scale: f32, enabled: bool) -> bool {
     enabled && playing && scale <= 0.5
+}
+
+/// Whether playback should use a separate draft-quality cache entry. The user preference remains
+/// opt-in, but if measured render cost means the frame workers cannot sustain real time, adapt the
+/// playing monitor to a cheaper render path. Paused frames always use their separate full-quality key.
+pub fn playback_draft_mode(playing: bool, scale: f32, enabled: bool, render_cost: f64, fps: f64, workers: usize) -> bool {
+    if !playing {
+        return false;
+    }
+    if draft_playback(playing, scale, enabled) {
+        return true;
+    }
+    let (lead, stride) = playback_plan(render_cost, fps, workers);
+    lead > 1 || stride > 1
 }
 
 pub struct Rgba {
@@ -1040,13 +1053,18 @@ mod tests {
     }
 
     #[test]
-    fn draft_decoding_only_for_reduced_resolution_playback() {
-        use super::draft_playback;
+    fn playback_draft_is_opt_in_or_automatically_enabled_when_workers_fall_behind() {
+        use super::{draft_playback, playback_draft_mode};
         assert!(draft_playback(true, 0.5, true) && draft_playback(true, 0.25, true));
-        assert!(!draft_playback(true, 1.0, true), "full resolution is never draft");
+        assert!(!draft_playback(true, 1.0, true), "manual draft decoding is limited to half resolution");
         assert!(!draft_playback(false, 0.5, true), "a paused frame is never draft");
-        assert!(!draft_playback(true, 0.5, false), "off unless enabled");
+        assert!(!draft_playback(true, 0.5, false), "manual draft decoding stays off unless enabled");
         assert!(!filmcraft_engine::autosave::Preferences::default().playback.draft_decode, "off by default");
+
+        assert!(!playback_draft_mode(false, 1.0, false, 0.5, 24.0, 6), "paused frames remain full quality");
+        assert!(!playback_draft_mode(true, 1.0, false, 0.1, 24.0, 6), "fast renders keep full quality");
+        assert!(playback_draft_mode(true, 1.0, false, 0.5, 24.0, 6), "slow renders adapt at full monitor resolution");
+        assert!(playback_draft_mode(true, 0.5, false, 0.5, 24.0, 6), "stalled half-resolution playback also adapts");
     }
 
     #[test]
