@@ -205,11 +205,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
         let enabled = app.session.prefs.playback.draft_decode;
         let render_cost = app.frames.render_cost();
         let manual_draft = crate::frames::draft_playback(playing, scale, enabled);
-        let draft = if use_gpu {
-            crate::frames::playback_draft_mode(playing, scale, enabled, render_cost, rate.as_f64(), was_adaptive)
-        } else {
-            manual_draft
-        };
+        let draft = if use_gpu { crate::frames::playback_draft_mode(playing, scale, enabled, render_cost, rate.as_f64(), was_adaptive) } else { manual_draft };
         ctx.data_mut(|d| {
             if use_gpu && playing && !manual_draft && draft {
                 d.insert_temp(draft_id, true);
