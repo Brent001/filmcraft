@@ -267,6 +267,9 @@ pub struct GraphicsStart {
     /// This start's attempt file (with `state`).
     attempt: Option<PathBuf>,
     mode: Mode,
+    /// Show the recovery notice only when this launch actually moved away from the default mode.
+    /// Once the fallback has painted successfully, later launches should not repeat the notice.
+    notice: bool,
     /// [`Self::reset_to_default`] was used: a later [`Self::confirm`] must not save this mode over it.
     reset: Arc<AtomicBool>,
 }
@@ -289,7 +292,7 @@ impl GraphicsStart {
         let forced = forced.map(|m| if LADDER.contains(&m) { m } else { first });
         let reset = Arc::new(AtomicBool::new(false));
         let Some(dir) = data_dir.filter(|_| !explicit_backend) else {
-            return Self { state: None, attempt: None, mode: forced.unwrap_or(Mode::Default), reset };
+            return Self { state: None, attempt: None, mode: forced.unwrap_or(Mode::Default), notice: false, reset };
         };
         let state = dir.join(STATE_FILE);
         let attempts_dir = dir.join(ATTEMPTS_DIR);
@@ -305,6 +308,9 @@ impl GraphicsStart {
             }
         }
         let file = state.display();
+        // Do not repeat the warning on every launch simply because the saved mode is DX12.
+        // It is needed when automatic recovery has just moved away from the default mode.
+        let notice = forced.is_none() && decision.moved_on && saved.map_or(first, |s| s.mode) == first;
         let next = match forced {
             Some(mode) => {
                 log::info!("graphics mode {} explicitly selected", mode.name());
@@ -330,7 +336,7 @@ impl GraphicsStart {
         {
             log::warn!("can't write {file}: {e}");
         }
-        let start = Self { state: Some(state), attempt: None, mode: next.mode, reset };
+        let start = Self { state: Some(state), attempt: None, mode: next.mode, notice, reset };
         start.with_new_attempt(&attempts_dir, now, pid)
     }
 
@@ -354,6 +360,12 @@ impl GraphicsStart {
         self.mode != Mode::Default
     }
 
+    /// Whether this launch should show the recovery notice. A saved fallback mode by itself is not
+    /// a new failure: once a fallback has painted successfully, don't show the same notice again.
+    pub fn should_show_recovery_notice(&self) -> bool {
+        self.notice
+    }
+
     /// Move on to the next mode after a start-up error wgpu reported; `false` when none is left.
     /// The error is certain, so the next mode is saved at once.
     pub fn step_down(&mut self) -> bool {
@@ -361,7 +373,11 @@ impl GraphicsStart {
             return false;
         };
         log::warn!("graphics mode {} failed to start; trying {}", self.mode.name(), next.name());
+        let failed_mode = self.mode;
         self.mode = next;
+        // This immediate fallback happens in the current launch before crash recovery can run.
+        // The existing notice text describes the default graphics mode failing.
+        self.notice |= failed_mode == Mode::Default;
         if let Some(state) = self.state.clone() {
             self.save(&state, Saved { mode: next, failures: 0 });
             if let Some(old) = self.attempt.take() {
@@ -767,8 +783,11 @@ mod tests {
         let moved = launch(&dir, 22, NOW + 120);
         assert_eq!(moved.mode(), second);
         assert_eq!(moved.degraded(), second != Mode::Default);
+        assert_eq!(moved.should_show_recovery_notice(), second != Mode::Default);
         moved.confirm();
-        assert_eq!(launch(&dir, 23, NOW + 180).mode(), second);
+        let recovered = launch(&dir, 23, NOW + 180);
+        assert_eq!(recovered.mode(), second);
+        assert!(!recovered.should_show_recovery_notice(), "a successful fallback must not repeat the notice on later launches");
         // one failure, then a start that paints: the count starts over
         let _ = std::fs::remove_dir_all(&dir);
         let _ = launch(&dir, 30, NOW);
@@ -855,7 +874,10 @@ mod tests {
         start.confirm();
         assert_eq!(launch(&dir, 72, NOW + 120).mode(), Mode::Default);
         // `--graphics <the last mode>` is kept for the next launches
-        GraphicsStart::begin_at(Some(&dir), false, Some(last), NOW + 180, 73).confirm();
+        let explicitly_selected = GraphicsStart::begin_at(Some(&dir), false, Some(last), NOW + 180, 73);
+        assert_eq!(explicitly_selected.mode(), last);
+        assert!(!explicitly_selected.should_show_recovery_notice(), "a user-selected backend is not an automatic recovery event");
+        explicitly_selected.confirm();
         assert_eq!(launch(&dir, 74, NOW + 240).mode(), last);
         // a mode this platform has not starts with the first one
         if !LADDER.contains(&Mode::Dx12) {
@@ -907,6 +929,9 @@ mod tests {
         for expected in LADDER.iter().skip(1) {
             assert!(start.step_down());
             assert_eq!(start.mode(), *expected);
+            if *expected != Mode::Default {
+                assert!(start.should_show_recovery_notice(), "a runtime fallback from default should show the notice once");
+            }
             assert_eq!(state_of(&dir), saved(*expected, 0));
             assert_eq!(attempt_files(&dir), 1, "one attempt file per process");
         }
