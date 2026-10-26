@@ -197,17 +197,22 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which)
             (_, t) => t,
         };
         let speed = if which == Which::Program { app.playback.speed } else { app.source_playback.clock.speed };
-        // Keep a separate cache for draft-quality frames. Opt-in draft decoding is available at
-        // half resolution; when measured render throughput falls behind, automatically use the
-        // cheaper CPU-effect fallback path during playback (including at full monitor resolution).
-        let draft = crate::frames::playback_draft_mode(
-            playing,
-            scale,
-            app.session.prefs.playback.draft_decode,
-            app.frames.render_cost(),
-            rate.as_f64(),
-            app.frames.workers(),
-        );
+        // Keep adaptive frames separate from full-quality paused frames. Manual draft decoding
+        // remains opt-in; a slow playback estimate can independently select the cheaper CPU-effect
+        // fallback path. Hysteresis prevents switching quality back and forth frame by frame.
+        let draft_id = egui::Id::new(("monitor-adaptive-draft", prefix));
+        let was_adaptive = ctx.data(|d| d.get_temp::<bool>(draft_id)).unwrap_or(false);
+        let enabled = app.session.prefs.playback.draft_decode;
+        let render_cost = app.frames.render_cost();
+        let manual_draft = crate::frames::draft_playback(playing, scale, enabled);
+        let draft = crate::frames::playback_draft_mode(playing, scale, enabled, render_cost, rate.as_f64(), was_adaptive);
+        ctx.data_mut(|d| {
+            if playing && !manual_draft && draft {
+                d.insert_temp(draft_id, true);
+            } else {
+                d.remove::<bool>(draft_id);
+            }
+        });
         let key = FrameKey { target, frame, size: size_key, revision: rev, draft };
         let project = app.session.project.clone();
         if playing {
