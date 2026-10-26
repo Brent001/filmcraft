@@ -99,6 +99,7 @@ fn categories_follow_premiere_order() {
             "mediaAnalysis",
             "mediaCache",
             "memory",
+            "control",
             "playback",
             "plugins",
             "timeline",
