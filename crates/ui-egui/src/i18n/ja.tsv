@@ -3616,3 +3616,26 @@
 	Open a sequence to search its graphics	シーケンスを開くとグラフィックスを検索できます
 	No text graphics in this sequence. Add text with the Type tool.	このシーケンスにはテキストのグラフィックスがありません。文字ツールでテキストを追加してください。
 	No matching text.	一致するテキストはありません。
+
+# GPU / Control settings added for current settings registry.
+	Acceleration	アクセラレーション
+	Automatic (GPU, with CPU fallback)	自動（GPU、CPU フォールバック付き）
+	Automatic (system default)	自動（システムの既定）
+	CPU only	CPU のみ
+	Control & MCP	コントロールと MCP
+	Enable MCP / Control Server on Startup	起動時に MCP / コントロールサーバーを有効化
+	Enabled on the next launch. The server listens only on 127.0.0.1 and requires a private 64-character token. FilmCraft creates a per-user token file automatically; do not share it.	次回起動時に有効になります。サーバーは 127.0.0.1 のみで待ち受け、非公開の 64 文字のトークンを必要とします。FilmCraft はユーザーごとのトークンファイルを自動作成します。このファイルを共有しないでください。
+	GPU & Performance	GPU とパフォーマンス
+	GPU backend	GPU バックエンド
+	GPU backend, preview compositor, power preference, upload-cache limit and GPU export acceleration apply at the next launch. Windows supports Automatic, Vulkan or DirectX 12; Linux supports Automatic or Vulkan. DX12 selects Microsoft's DXC shader compiler when the bundled runtime is present. Failed startup still uses FilmCraft's graphics recovery and CPU fallback.	GPU バックエンド、プレビューコンポジター、電源設定、アップロードキャッシュの上限、GPU 書き出しアクセラレーションは次回起動時に適用されます。Windows は自動、Vulkan、DirectX 12 に対応し、Linux は自動または Vulkan に対応します。同梱ランタイムがある場合、DX12 は Microsoft の DXC シェーダーコンパイラーを選択します。起動に失敗した場合も、FilmCraft はグラフィックスの復旧処理と CPU フォールバックを使用します。
+	GPU power preference	GPU の電源設定
+	GPU upload-cache entries	GPU アップロードキャッシュのエントリー数
+	GPU-accelerated export	GPU アクセラレーションによる書き出し
+	High performance	高パフォーマンス
+	Low power	省電力
+	MCP / Control Server Port	MCP / コントロールサーバーのポート
+	Preview compositor	プレビューコンポジター
+	System default	システムの既定
+	Vulkan	Vulkan
+	entries	エントリー
+	port	ポート
