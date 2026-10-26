@@ -509,8 +509,8 @@ impl FilmcraftApp {
                 let max_texture = rs.device.limits().max_texture_dimension_2d;
                 let adapter_name = rs.adapter.get_info().name;
                 if compositor.effects_accelerated() {
-                    log::info!("GPU compositor and standard-effect compute pipeline enabled on {adapter_name}");
-                    self.ui.status = format!("GPU effects and compositing active on {adapter_name}");
+                    log::info!("GPU compositor and standard-effect compute pipeline enabled on {adapter_name}; advanced VFX may still use the CPU fallback");
+                    self.ui.status = format!("GPU compositing and standard effects active on {adapter_name}; advanced effects may use CPU");
                 } else {
                     log::warn!("GPU compositor enabled on {adapter_name}, but its compute effect stage is unavailable; effect layers still render on the CPU");
                     self.ui.status = format!("GPU compositor active on {adapter_name}; GPU effect kernels unavailable, effects render on CPU");
