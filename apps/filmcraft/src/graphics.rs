@@ -355,6 +355,14 @@ impl GraphicsStart {
         self.mode
     }
 
+    /// Whether this launch is using a non-default graphics mode.
+    ///
+    /// This is independent of the recovery notice: an already-confirmed fallback remains
+    /// degraded, but does not repeat the notice on subsequent launches.
+    pub fn degraded(&self) -> bool {
+        self.mode != Mode::Default
+    }
+
     /// Whether this launch should show the recovery notice. A saved fallback mode by itself is not
     /// a new failure: once a fallback has painted successfully, don't show the same notice again.
     pub fn should_show_recovery_notice(&self) -> bool {
