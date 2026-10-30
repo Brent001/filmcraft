@@ -355,10 +355,11 @@ impl GraphicsStart {
         self.mode
     }
 
-    /// Whether this launch is using a non-default graphics mode.
+    /// Whether this launch is using a non-default graphics mode (unit-test helper).
     ///
     /// This is independent of the recovery notice: an already-confirmed fallback remains
     /// degraded, but does not repeat the notice on subsequent launches.
+    #[cfg(test)]
     pub fn degraded(&self) -> bool {
         self.mode != Mode::Default
     }
