@@ -686,12 +686,13 @@ mod tests {
         }
         // without a count (an earlier build of this change wrote `pending`): none
         assert_eq!(parse_state(r#"{"mode":"dx12","pending":true}"#), saved(Mode::Dx12, 0));
+        // Vulkan is a supported recovery mode on Windows and Linux.
+        assert_eq!(parse_state(r#"{"mode":"vulkan","failures":1}"#), saved(Mode::Vulkan, 1));
         for bad in [
             "",
             "{",
             "null",
             "[]",
-            r#"{"mode":"vulkan","failures":1}"#,
             r#"{"failures":1}"#,
             r#"{"mode":1,"failures":1}"#,
             r#"{"mode":"dx12","failures":"one"}"#,
