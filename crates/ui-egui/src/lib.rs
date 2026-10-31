@@ -380,10 +380,8 @@ impl GpuState {
 
     /// Dimensions of monitor outputs that have completed at least one GPU composite.
     pub fn output_sizes(&self) -> Vec<(u64, (u32, u32))> {
-        let mut sizes = self.outputs.iter()
-            .filter(|(_, output)| output.size.0 > 0 && output.size.1 > 0)
-            .map(|(slot, output)| (*slot, output.size))
-            .collect::<Vec<_>>();
+        let mut sizes =
+            self.outputs.iter().filter(|(_, output)| output.size.0 > 0 && output.size.1 > 0).map(|(slot, output)| (*slot, output.size)).collect::<Vec<_>>();
         sizes.sort_unstable_by_key(|(slot, _)| *slot);
         sizes
     }

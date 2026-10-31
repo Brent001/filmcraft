@@ -33,14 +33,7 @@ impl FilmcraftApp {
                     log::warn!("GPU compositor enabled on {adapter_name}, but its compute effect stage is unavailable; effect layers still render on the CPU");
                     self.ui.status = format!("GPU compositor active on {adapter_name}; GPU effect kernels unavailable, effects render on CPU");
                 }
-                self.gpu = Some(GpuState {
-                    render_state: rs,
-                    compositor,
-                    outputs: std::collections::HashMap::new(),
-                    last_ms: 0.0,
-                    broken,
-                    max_texture,
-                });
+                self.gpu = Some(GpuState { render_state: rs, compositor, outputs: std::collections::HashMap::new(), last_ms: 0.0, broken, max_texture });
             }
             _ => log::error!("GPU compositor failed to initialise; compositing on the CPU"),
         }
@@ -67,12 +60,7 @@ impl FilmcraftApp {
 
     /// Composite into a monitor-specific retained texture. Program and Source can render in the
     /// same egui frame, so they must not share the compositor's transient target or native ID.
-    pub fn gpu_present_for_slot(
-        &mut self,
-        key: FrameKey,
-        plan: &frames::GpuPlan,
-        slot: u64,
-    ) -> Option<(egui::TextureId, (u32, u32))> {
+    pub fn gpu_present_for_slot(&mut self, key: FrameKey, plan: &frames::GpuPlan, slot: u64) -> Option<(egui::TextureId, (u32, u32))> {
         if self.gpu.as_ref()?.broken.load(std::sync::atomic::Ordering::Relaxed) {
             self.disable_gpu("device error");
             return None;
@@ -108,19 +96,10 @@ impl FilmcraftApp {
         let mut renderer = render_state.renderer.write();
         let id = match output.texture {
             Some(id) => {
-                renderer.update_egui_texture_from_wgpu_texture(
-                    &render_state.device,
-                    &view,
-                    eframe::wgpu::FilterMode::Linear,
-                    id,
-                );
+                renderer.update_egui_texture_from_wgpu_texture(&render_state.device, &view, eframe::wgpu::FilterMode::Linear, id);
                 id
             }
-            None => renderer.register_native_texture(
-                &render_state.device,
-                &view,
-                eframe::wgpu::FilterMode::Linear,
-            ),
+            None => renderer.register_native_texture(&render_state.device, &view, eframe::wgpu::FilterMode::Linear),
         };
         output.texture = Some(id);
         output.last_key = Some(key);
