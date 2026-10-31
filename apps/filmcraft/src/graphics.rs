@@ -532,5 +532,4 @@ pub fn is_graphics_failure(err: &eframe::Error) -> bool {
 }
 
 #[cfg(test)]
-
 mod tests;
