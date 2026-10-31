@@ -17,11 +17,11 @@
   ],
   "registry": [
     [
-      "-1",
+      "2",
       "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\filmcraft.exe",
       "",
       "[#FilmcraftExe]"
     ]
   ],
-  "mode": "dualScope"
+  "mode": "perMachine"
 }
