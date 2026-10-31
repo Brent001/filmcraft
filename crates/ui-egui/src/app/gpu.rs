@@ -18,9 +18,7 @@ impl FilmcraftApp {
             flag.store(true, std::sync::atomic::Ordering::Relaxed);
         }));
 
-        let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            filmcraft_gpu::GpuCompositor::new(&rs.device, &rs.queue)
-        }));
+        let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| filmcraft_gpu::GpuCompositor::new(&rs.device, &rs.queue)));
         match made {
             Ok(mut compositor) if !broken.load(std::sync::atomic::Ordering::Relaxed) => {
                 compositor.set_upload_cache_limit(self.session.prefs.gpu.upload_cache_entries as usize);
