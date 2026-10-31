@@ -742,40 +742,49 @@ fn box_rows(px: &mut [f32], w: usize, r: usize, repeat: bool) {
     if r == 0 {
         return;
     }
+    let context = filmcraft_media::cancel::Context::current();
     px.par_chunks_mut(w * 4).for_each_init(
         || vec![0f32; w * 4],
         |tmp, row| {
-            tmp.copy_from_slice(row);
-            let inv = 1.0 / (2 * r + 1) as f32;
-            let fetch = |i: isize| -> usize { if repeat { i.clamp(0, w as isize - 1) as usize } else { i as usize } };
-            let mut acc = [0f32; 4];
-            for i in -(r as isize)..=(r as isize) {
-                if repeat || (i >= 0 && (i as usize) < w) {
-                    let j = fetch(i);
-                    for k in 0..4 {
-                        acc[k] += tmp[j * 4 + k];
+            context.clone().run(|| {
+                if filmcraft_media::cancel::cancelled() {
+                    return;
+                }
+                tmp.copy_from_slice(row);
+                let inv = 1.0 / (2 * r + 1) as f32;
+                let fetch = |i: isize| -> usize { if repeat { i.clamp(0, w as isize - 1) as usize } else { i as usize } };
+                let mut acc = [0f32; 4];
+                for i in -(r as isize)..=(r as isize) {
+                    if repeat || (i >= 0 && (i as usize) < w) {
+                        let j = fetch(i);
+                        for k in 0..4 {
+                            acc[k] += tmp[j * 4 + k];
+                        }
                     }
                 }
-            }
-            for x in 0..w {
-                for k in 0..4 {
-                    row[x * 4 + k] = acc[k] * inv;
-                }
-                let out_i = x as isize - r as isize;
-                let in_i = x as isize + r as isize + 1;
-                if repeat || out_i >= 0 {
-                    let j = fetch(out_i);
+                for x in 0..w {
+                    if x % 64 == 0 && filmcraft_media::cancel::cancelled() {
+                        break;
+                    }
                     for k in 0..4 {
-                        acc[k] -= tmp[j * 4 + k];
+                        row[x * 4 + k] = acc[k] * inv;
+                    }
+                    let out_i = x as isize - r as isize;
+                    let in_i = x as isize + r as isize + 1;
+                    if repeat || out_i >= 0 {
+                        let j = fetch(out_i);
+                        for k in 0..4 {
+                            acc[k] -= tmp[j * 4 + k];
+                        }
+                    }
+                    if repeat || (in_i as usize) < w {
+                        let j = fetch(in_i);
+                        for k in 0..4 {
+                            acc[k] += tmp[j * 4 + k];
+                        }
                     }
                 }
-                if repeat || (in_i as usize) < w {
-                    let j = fetch(in_i);
-                    for k in 0..4 {
-                        acc[k] += tmp[j * 4 + k];
-                    }
-                }
-            }
+            });
         },
     );
 }
@@ -784,17 +793,26 @@ fn transpose(img: &Image) -> Image {
     let (w, h) = (img.w, img.h);
     let mut out = Image::new(h, w);
     const B: usize = 32;
+    let context = filmcraft_media::cancel::Context::current();
     out.px.par_chunks_mut(h * 4 * B).enumerate().for_each(|(bi, chunk)| {
-        let x0 = bi * B;
-        let rows = chunk.len() / (h * 4);
-        for y in 0..h {
-            for dx in 0..rows {
-                let x = x0 + dx;
-                let s = (y * w + x) * 4;
-                let d = (dx * h + y) * 4;
-                chunk[d..d + 4].copy_from_slice(&img.px[s..s + 4]);
+        context.clone().run(|| {
+            if filmcraft_media::cancel::cancelled() {
+                return;
             }
-        }
+            let x0 = bi * B;
+            let rows = chunk.len() / (h * 4);
+            for y in 0..h {
+                if y % 16 == 0 && filmcraft_media::cancel::cancelled() {
+                    break;
+                }
+                for dx in 0..rows {
+                    let x = x0 + dx;
+                    let s = (y * w + x) * 4;
+                    let d = (dx * h + y) * 4;
+                    chunk[d..d + 4].copy_from_slice(&img.px[s..s + 4]);
+                }
+            }
+        });
     });
     out
 }

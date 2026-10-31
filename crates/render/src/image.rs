@@ -11,38 +11,14 @@ pub struct Image {
 }
 
 impl Image {
-    pub const MAX_PIXELS: usize = 268_435_456;
-
     pub fn new(w: usize, h: usize) -> Self {
-        let len = w.checked_mul(h).filter(|&px| px <= Self::MAX_PIXELS).and_then(|px| px.checked_mul(4)).unwrap_or(0);
-        let (w, h, px) = if len == 0 && (w > 0 || h > 0) {
-            (0, 0, Vec::new())
-        } else {
-            let mut px = Vec::new();
-            if px.try_reserve_exact(len).is_ok() {
-                px.resize(len, 0.0);
-                (w, h, px)
-            } else {
-                (0, 0, Vec::new())
-            }
-        };
-        Self { w, h, px }
+        Self { w, h, px: vec![0.0; w * h * 4] }
     }
     pub fn filled(w: usize, h: usize, c: [f32; 4]) -> Self {
-        let len = w.checked_mul(h).filter(|&px| px <= Self::MAX_PIXELS).and_then(|px| px.checked_mul(4)).unwrap_or(0);
-        let (w, h, px) = if len == 0 && (w > 0 || h > 0) {
-            (0, 0, Vec::new())
-        } else {
-            let mut px = Vec::new();
-            if px.try_reserve_exact(len).is_ok() {
-                for _ in 0..w * h {
-                    px.extend_from_slice(&c);
-                }
-                (w, h, px)
-            } else {
-                (0, 0, Vec::new())
-            }
-        };
+        let mut px = Vec::with_capacity(w * h * 4);
+        for _ in 0..w * h {
+            px.extend_from_slice(&c);
+        }
         Self { w, h, px }
     }
     #[inline]
@@ -107,9 +83,6 @@ impl Image {
     /// Resample `self` into a `w`×`h` image through `m` (maps source pixels → destination pixels).
     /// Uses bilinear filtering, with a box pre-filter (mip level) when minifying by more than 2×.
     pub fn transformed(&self, w: usize, h: usize, m: &Affine) -> Image {
-        if self.w == 0 || self.h == 0 || w == 0 || h == 0 {
-            return Image::new(w, h);
-        }
         let Some(inv) = m.inverse() else { return Image::new(w, h) };
         // minification factor
         let sx = (m.a * m.a + m.b * m.b).sqrt();
@@ -120,9 +93,6 @@ impl Image {
             let m2 = m.then_apply(&Affine::scale(2.0, 2.0));
             return half.transformed(w, h, &m2);
         }
-        if w == 0 || h == 0 {
-            return Image::new(0, 0);
-        }
         let mut out = Image::new(w, h);
         // Destination bounds of the source rect, to skip empty rows/cols.
         let b = m.bounds(&filmcraft_geom::Rect::new(0.0, 0.0, self.w as f64, self.h as f64));
@@ -131,39 +101,60 @@ impl Image {
         let x0 = (b.x.floor().max(0.0) as usize).min(w);
         let x1 = (b.right().ceil().max(0.0) as usize).min(w);
         let axis_aligned = m.b == 0.0 && m.c == 0.0;
+        // Frame jobs are cooperatively cancelled when the playhead moves. Rayon workers do not
+        // inherit the job's thread-local cancellation context automatically, so explicitly carry
+        // it into each row and stop large transforms promptly.
+        let context = filmcraft_media::cancel::Context::current();
         out.px.par_chunks_mut(w * 4).enumerate().skip(y0).take(y1.saturating_sub(y0)).for_each(|(y, row)| {
-            let py = y as f64 + 0.5;
-            for x in x0..x1 {
-                let px = x as f64 + 0.5;
-                let (u, v) =
-                    if axis_aligned { (inv.a * px + inv.e, inv.d * py + inv.f) } else { (inv.a * px + inv.c * py + inv.e, inv.b * px + inv.d * py + inv.f) };
-                if u < -1.0 || v < -1.0 || u > self.w as f64 + 1.0 || v > self.h as f64 + 1.0 {
-                    continue;
+            context.clone().run(|| {
+                if filmcraft_media::cancel::cancelled() {
+                    return;
                 }
-                let s = self.sample_bilinear(u as f32, v as f32);
-                row[x * 4..x * 4 + 4].copy_from_slice(&s);
-            }
+                let py = y as f64 + 0.5;
+                for x in x0..x1 {
+                    if x % 64 == 0 && filmcraft_media::cancel::cancelled() {
+                        break;
+                    }
+                    let px = x as f64 + 0.5;
+                    let (u, v) = if axis_aligned {
+                        (inv.a * px + inv.e, inv.d * py + inv.f)
+                    } else {
+                        (inv.a * px + inv.c * py + inv.e, inv.b * px + inv.d * py + inv.f)
+                    };
+                    if u < -1.0 || v < -1.0 || u > self.w as f64 + 1.0 || v > self.h as f64 + 1.0 {
+                        continue;
+                    }
+                    let s = self.sample_bilinear(u as f32, v as f32);
+                    row[x * 4..x * 4 + 4].copy_from_slice(&s);
+                }
+            });
         });
         out
     }
 
     /// Half-size box downsample.
     pub fn downsample2(&self) -> Image {
-        if self.w == 0 || self.h == 0 {
-            return Image::new(0, 0);
-        }
         let (w, h) = ((self.w / 2).max(1), (self.h / 2).max(1));
         let mut out = Image::new(w, h);
+        let context = filmcraft_media::cancel::Context::current();
         out.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
-            for x in 0..w {
-                let a = self.get_clamped(2 * x as isize, 2 * y as isize);
-                let b = self.get_clamped(2 * x as isize + 1, 2 * y as isize);
-                let c = self.get_clamped(2 * x as isize, 2 * y as isize + 1);
-                let d = self.get_clamped(2 * x as isize + 1, 2 * y as isize + 1);
-                for k in 0..4 {
-                    row[x * 4 + k] = (a[k] + b[k] + c[k] + d[k]) * 0.25;
+            context.clone().run(|| {
+                if filmcraft_media::cancel::cancelled() {
+                    return;
                 }
-            }
+                for x in 0..w {
+                    if x % 64 == 0 && filmcraft_media::cancel::cancelled() {
+                        break;
+                    }
+                    let a = self.get_clamped(2 * x as isize, 2 * y as isize);
+                    let b = self.get_clamped(2 * x as isize + 1, 2 * y as isize);
+                    let c = self.get_clamped(2 * x as isize, 2 * y as isize + 1);
+                    let d = self.get_clamped(2 * x as isize + 1, 2 * y as isize + 1);
+                    for k in 0..4 {
+                        row[x * 4 + k] = (a[k] + b[k] + c[k] + d[k]) * 0.25;
+                    }
+                }
+            });
         });
         out
     }
@@ -194,30 +185,33 @@ impl Image {
 
     /// Apply a per-pixel function on straight-alpha colour (alpha preserved).
     pub fn map_rgb(&mut self, f: impl Fn([f32; 3], usize, usize) -> [f32; 3] + Sync) {
-        if self.w == 0 || self.h == 0 {
-            return;
-        }
         let w = self.w;
+        let context = filmcraft_media::cancel::Context::current();
         self.px.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
-            for x in 0..w {
-                let p = &mut row[x * 4..x * 4 + 4];
-                let a = p[3];
-                if a <= 1e-6 {
-                    continue;
+            context.clone().run(|| {
+                if filmcraft_media::cancel::cancelled() {
+                    return;
                 }
-                let c = f([p[0] / a, p[1] / a, p[2] / a], x, y);
-                p[0] = c[0] * a;
-                p[1] = c[1] * a;
-                p[2] = c[2] * a;
-            }
+                for x in 0..w {
+                    if x % 64 == 0 && filmcraft_media::cancel::cancelled() {
+                        break;
+                    }
+                    let p = &mut row[x * 4..x * 4 + 4];
+                    let a = p[3];
+                    if a <= 1e-6 {
+                        continue;
+                    }
+                    let c = f([p[0] / a, p[1] / a, p[2] / a], x, y);
+                    p[0] = c[0] * a;
+                    p[1] = c[1] * a;
+                    p[2] = c[2] * a;
+                }
+            });
         });
     }
 
     /// Convert to straight sRGB RGBA8.
     pub fn to_rgba8(&self) -> Vec<u8> {
-        if self.w == 0 || self.h == 0 {
-            return Vec::new();
-        }
         let mut out = vec![0u8; self.w * self.h * 4];
         out.par_chunks_mut(self.w * 4).zip(self.px.par_chunks(self.w * 4)).for_each(|(o, s)| filmcraft_frame::linear_premul_to_srgb8(s, o));
         out
@@ -225,37 +219,20 @@ impl Image {
 
     /// Opaque version over black (for monitors).
     pub fn over_black_rgba8(&self) -> Vec<u8> {
-        if self.w == 0 || self.h == 0 {
-            return Vec::new();
-        }
         let mut out = vec![0u8; self.w * self.h * 4];
-        let lut = filmcraft_color::linear_to_srgb_u8_table();
+        let context = filmcraft_media::cancel::Context::current();
         out.par_chunks_mut(self.w * 4).zip(self.px.par_chunks(self.w * 4)).for_each(|(o, s)| {
-            for (o, s) in o.as_chunks_mut::<4>().0.iter_mut().zip(s.as_chunks::<4>().0) {
-                o[0] = filmcraft_color::linear_to_srgb_u8_in(lut, s[0]);
-                o[1] = filmcraft_color::linear_to_srgb_u8_in(lut, s[1]);
-                o[2] = filmcraft_color::linear_to_srgb_u8_in(lut, s[2]);
-                o[3] = 255;
-            }
-        });
-        out
-    }
-
-    /// [`Self::over_black_rgba8`] with each pixel's alpha in the fourth byte: the color bytes are
-    /// the same (the sRGB of the premultiplied linear color), so the picture still shows over
-    /// black, and the alpha says where it is transparent.
-    pub fn over_black_with_alpha_rgba8(&self) -> Vec<u8> {
-        if self.w == 0 || self.h == 0 {
-            return Vec::new();
-        }
-        let mut out = vec![0u8; self.w * self.h * 4];
-        out.par_chunks_mut(self.w * 4).zip(self.px.par_chunks(self.w * 4)).for_each(|(o, s)| {
-            for (o, s) in o.as_chunks_mut::<4>().0.iter_mut().zip(s.as_chunks::<4>().0) {
-                o[0] = filmcraft_color::linear_to_srgb_u8(s[0]);
-                o[1] = filmcraft_color::linear_to_srgb_u8(s[1]);
-                o[2] = filmcraft_color::linear_to_srgb_u8(s[2]);
-                o[3] = (s[3].clamp(0.0, 1.0) * 255.0).round() as u8;
-            }
+            context.clone().run(|| {
+                if filmcraft_media::cancel::cancelled() {
+                    return;
+                }
+                for (o, s) in o.as_chunks_mut::<4>().0.iter_mut().zip(s.as_chunks::<4>().0) {
+                    o[0] = filmcraft_color::linear_to_srgb_u8(s[0]);
+                    o[1] = filmcraft_color::linear_to_srgb_u8(s[1]);
+                    o[2] = filmcraft_color::linear_to_srgb_u8(s[2]);
+                    o[3] = 255;
+                }
+            });
         });
         out
     }

@@ -151,8 +151,7 @@ fn gpu_blend_modes_match_cpu() {
         1.0,
         24,
         filmcraft_time::FrameRate::FPS_24,
-    )
-    .unwrap();
+    );
     let demo = Arc::new(VideoFrame::rgba8(320, 180, pixels));
     let base = ramp_layer(200, 180, 3);
     let top = ramp_layer(160, 120, 0);
@@ -345,4 +344,33 @@ fn quad_bounds_clamps_and_handles_non_finite() {
     assert_eq!(quad_bounds(&l(Affine::translate(f64::NAN, 0.0)), 100, 100), Some((0, 0, 100, 100)));
     assert_eq!(quad_bounds(&l(Affine::scale(f64::INFINITY, 1.0)), 100, 100), Some((0, 0, 100, 100)));
     assert_eq!(quad_bounds(&l(Affine::translate(-50.0, 0.0)), 100, 100), None);
+}
+
+/// The Source and Program monitor slots must retain independent output pixels even when rendered
+/// sequentially by the same compositor in one UI frame.
+#[test]
+fn monitor_output_slots_are_independent() {
+    let Some((dev, q)) = device() else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let mut c = GpuCompositor::new(&dev, &q);
+    let solid = |rgba: [f32; 4]| FramePlan::Layers {
+        width: 8,
+        height: 8,
+        layers: vec![PlanLayer {
+            frame: Arc::new(VideoFrame::rgba_f32(1, 1, rgba.to_vec())),
+            matrix: Affine::scale(8.0, 8.0),
+            opacity: 1.0,
+            blend: Blend::Normal,
+            fx: None,
+            input: None,
+        }],
+    };
+    c.composite_prepared_for_slot(&solid([1.0, 0.0, 0.0, 1.0]), None, 0);
+    let (_, _, program_before) = c.read_output().expect("read Program output");
+    c.composite_prepared_for_slot(&solid([0.0, 1.0, 0.0, 1.0]), None, 1);
+    let (_, _, program_after) = c.read_output().expect("read retained Program output");
+    assert_eq!(program_before, program_after, "rendering Source overwrote Program's native texture");
+    assert_eq!(c.outputs.len(), 2, "the compositor should retain independent target textures");
 }

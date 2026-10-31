@@ -143,6 +143,90 @@ fn cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>, bool)> {
         ("posterize", vec![("levels", fl(2.0))], true),
         ("posterize", vec![("levels", fl(7.0))], true),
         ("posterize", vec![("levels", fl(255.0))], true),
+        ("median", vec![("radius", fl(0.0))], false),
+        ("median", vec![("radius", fl(1.0))], false),
+        ("mosaic", vec![("horizontal", fl(7.0)), ("vertical", fl(5.0))], false),
+        ("mosaic", vec![("horizontal", fl(100.0)), ("vertical", fl(80.0))], false),
+        ("find_edges", vec![("invert", ParamValue::Bool(false)), ("blend", fl(0.0))], true),
+        ("find_edges", vec![("invert", ParamValue::Bool(true)), ("blend", fl(45.0))], true),
+        ("emboss", vec![("direction", fl(35.0)), ("relief", fl(8.0)), ("contrast", fl(65.0)), ("blend", fl(20.0))], false),
+        ("emboss", vec![("direction", fl(-90.0)), ("relief", fl(0.0)), ("blend", fl(100.0))], false),
+        ("replicate", vec![("count", fl(4.0))], false),
+        ("replicate", vec![("count", fl(16.0))], false),
+        ("strobe", vec![("period", fl(1.0)), ("duration", fl(0.5)), ("blend", fl(25.0)), ("color", col(0.9, 0.2, 0.1))], false),
+        ("strobe", vec![("period", fl(1.0)), ("duration", fl(0.0))], false),
+        ("noise", vec![("amount", fl(35.0)), ("color", ParamValue::Bool(true)), ("clip", ParamValue::Bool(true))], false),
+        ("noise", vec![("amount", fl(50.0)), ("color", ParamValue::Bool(false)), ("clip", ParamValue::Bool(false))], false),
+        ("luma_key", vec![("threshold", fl(70.0)), ("cutoff", fl(20.0))], true),
+        ("color_key", vec![("color", col(0.05, 0.15, 0.9)), ("tolerance", fl(45.0)), ("feather", fl(15.0))], true),
+        (
+            "ultra_key",
+            vec![
+                ("key_color", col(0.0, 0.8, 0.2)),
+                ("tolerance", fl(60.0)),
+                ("transparency", fl(45.0)),
+                ("soften", fl(25.0)),
+                ("pedestal", fl(10.0)),
+                ("spill", fl(60.0)),
+            ],
+            true,
+        ),
+        ("ultra_key", vec![("output", ch(1)), ("spill", fl(0.0))], true),
+        (
+            "four_color_gradient",
+            vec![
+                ("c1", col(1.0, 0.0, 0.0)),
+                ("c2", col(0.0, 1.0, 0.0)),
+                ("c3", col(0.0, 0.0, 1.0)),
+                ("c4", col(1.0, 1.0, 0.0)),
+                ("opacity", fl(45.0)),
+                ("blend", fl(80.0)),
+            ],
+            false,
+        ),
+        (
+            "ramp",
+            vec![("start", pt(5.0, 7.0)), ("end", pt(55.0, 31.0)), ("start_color", col(0.1, 0.2, 0.9)), ("end_color", col(0.9, 0.8, 0.1)), ("blend", fl(15.0))],
+            false,
+        ),
+        ("ramp", vec![("shape", ch(1)), ("start", pt(12.0, 15.0)), ("end", pt(45.0, 28.0)), ("blend", fl(30.0))], false),
+        ("circle", vec![("center", pt(25.0, 16.0)), ("radius", fl(12.0)), ("color", col(0.9, 0.1, 0.4)), ("opacity", fl(75.0))], false),
+        ("circle", vec![("radius", fl(0.0)), ("opacity", fl(100.0))], false),
+        ("grid", vec![("size", fl(9.0)), ("border", fl(2.0)), ("color", col(0.2, 0.9, 0.4)), ("opacity", fl(55.0))], false),
+        ("grid", vec![("size", fl(1.0)), ("border", fl(0.0)), ("opacity", fl(100.0))], false),
+        ("lens_flare", vec![("center", pt(19.0, 20.0)), ("brightness", fl(120.0)), ("blend", fl(10.0))], true),
+        ("twirl", vec![("center", pt(28.0, 17.0)), ("angle", fl(80.0)), ("radius", fl(75.0))], false),
+        ("twirl", vec![("angle", fl(-30.0)), ("radius", fl(0.0))], false),
+        ("wave_warp", vec![("height", fl(12.0)), ("width", fl(40.0)), ("direction", fl(35.0)), ("speed", fl(0.5))], false),
+        ("wave_warp", vec![("height", fl(-4.0)), ("width", fl(0.0)), ("direction", fl(180.0)), ("speed", fl(0.0))], false),
+        ("lens_distortion", vec![("curvature", fl(45.0)), ("h_decentering", fl(10.0)), ("v_decentering", fl(-8.0))], false),
+        ("lens_distortion", vec![("curvature", fl(-70.0))], false),
+        ("basic_3d", vec![("swivel", fl(20.0)), ("tilt", fl(-15.0)), ("distance", fl(5.0))], false),
+        ("bevel_alpha", vec![("thickness", fl(3.0)), ("angle", fl(35.0)), ("intensity", fl(70.0))], false),
+        ("bevel_alpha", vec![("thickness", fl(0.0)), ("angle", fl(90.0)), ("intensity", fl(100.0))], false),
+        (
+            "drop_shadow",
+            vec![
+                ("color", col(0.1, 0.05, 0.02)),
+                ("opacity", fl(70.0)),
+                ("direction", fl(135.0)),
+                ("distance", fl(8.0)),
+                ("softness", fl(3.0)),
+                ("only", ParamValue::Bool(false)),
+            ],
+            false,
+        ),
+        (
+            "drop_shadow",
+            vec![("opacity", fl(100.0)), ("direction", fl(-90.0)), ("distance", fl(14.0)), ("softness", fl(0.0)), ("only", ParamValue::Bool(true))],
+            false,
+        ),
+        ("drop_shadow", vec![("opacity", fl(45.0)), ("distance", fl(2.0)), ("softness", fl(15.0)), ("only", ParamValue::Bool(true))], false),
+        (
+            "drop_shadow",
+            vec![("color", col(0.2, 0.2, 0.2)), ("opacity", fl(35.0)), ("distance", fl(0.0)), ("softness", fl(0.0)), ("only", ParamValue::Bool(false))],
+            false,
+        ),
         ("gaussian_blur", vec![("blurriness", fl(0.0))], false),
         ("gaussian_blur", vec![("blurriness", fl(5.0))], false),
         ("gaussian_blur", vec![("blurriness", fl(5.0)), ("repeat_edge", ParamValue::Bool(true))], false),
@@ -313,7 +397,35 @@ fn gpu_effects_match_cpu_exactly() {
         eprintln!("no GPU adapter; skipping");
         return;
     };
-    let mut c = GpuCompositor::new(&dev, &q);
+    effects_match_cpu_exactly(&dev, &q);
+}
+
+/// The same on DX12 with FXC, wgpu's shader compiler when `dxcompiler.dll` is not shipped (as in
+/// FilmCraft's builds). FXC aborted on the effect stage ("internal error: compilation aborted
+/// unexpectedly"), so every Windows device on DX12 rendered effects, previews and exports on the
+/// CPU. WARP stands in when there is no GPU.
+#[cfg(windows)]
+#[test]
+fn gpu_effects_match_cpu_exactly_with_fxc() {
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.backends = wgpu::Backends::DX12;
+    desc.backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::Fxc;
+    let instance = wgpu::Instance::new(desc);
+    let adapter = [false, true].into_iter().find_map(|force_fallback_adapter| {
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions { force_fallback_adapter, ..Default::default() })).ok()
+    });
+    let Some(adapter) = adapter else {
+        eprintln!("no DX12 adapter; skipping");
+        return;
+    };
+    eprintln!("DX12 + FXC on {}", adapter.get_info().name);
+    let (dev, q) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("DX12 device");
+    effects_match_cpu_exactly(&dev, &q);
+}
+
+fn effects_match_cpu_exactly(dev: &wgpu::Device, q: &wgpu::Queue) {
+    let mut c = GpuCompositor::new(dev, q);
+    assert!(c.fx.is_some(), "the effect stage did not build on this device (see the log for the pipeline error)");
     let (w, h) = (67u32, 41u32);
     let px = picture(w, h);
     let frame = VideoFrame::rgba_f32(w, h, px.clone());
@@ -395,6 +507,13 @@ fn gpu_effect_chains_match_cpu() {
             effect("invert", &[("channel", ParamValue::Choice(4))]),
             effect("directional_blur", &[("length", fl(6.0)), ("direction", fl(90.0))]),
         ],
+        // Shadow Only must release the preserved-original texture before the next effect begins.
+        vec![
+            effect("drop_shadow", &[("only", ParamValue::Bool(true)), ("distance", fl(5.0)), ("softness", fl(3.0))]),
+            effect("brightness_contrast", &[("brightness", fl(20.0)), ("contrast", fl(30.0))]),
+            effect("drop_shadow", &[("only", ParamValue::Bool(false)), ("distance", fl(2.0)), ("softness", fl(1.0))]),
+            effect("tint", &[("amount", fl(25.0))]),
+        ],
     ];
     for chain in chains {
         let ops: Vec<FxOp> = chain.iter().filter_map(|e| FxOp::eval(e, &cx(Tick::ZERO, 1.0), w as usize, h as usize)).collect();
@@ -453,6 +572,7 @@ fn hostile_parameters_are_bounded() {
     let (w, h) = (40usize, 24usize);
     let nan = [
         effect("brightness_contrast", &[("brightness", fl(f64::NAN))]),
+        effect("median", &[("radius", fl(2.0))]),
         effect("gaussian_blur", &[("blurriness", fl(f64::INFINITY))]),
         effect("directional_blur", &[("length", fl(f64::NAN))]),
         effect("transform", &[("rotation", fl(f64::NAN))]),

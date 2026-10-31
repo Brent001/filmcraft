@@ -55,7 +55,7 @@ impl Builder {
         let id = self.p.add_item(
             &info.name.clone(),
             Label::Iris,
-            ItemKind::Media(Box::new(MediaClip {
+            ItemKind::Media(MediaClip {
                 media: MediaRef::Generator(src.generator.clone()),
                 info,
                 interpret: Default::default(),
@@ -65,7 +65,7 @@ impl Builder {
                 offline: false,
                 proxy: None,
                 identity: None,
-            })),
+            }),
             None,
         );
         self.map.0.insert(id, Arc::new(src) as SharedSource);
@@ -899,8 +899,8 @@ fn gpu_transition_of_blended_clips_matches_cpu_render() {
 /// Standard effect chains run on the GPU: every clip below plans as a GPU layer with its effects
 /// (no CPU-rendered image), including keyframed parameters, transformed clips, partial opacity
 /// and blend modes, and matches the CPU render with the GPU parity tolerance (p99 ≤ 6, mean < 1.5
-/// away from layer outlines) at three times. A clip with an effect the GPU stage lacks (Emboss)
-/// still falls back to a CPU layer image.
+/// away from layer outlines) at three times. Emboss has a GPU kernel and is covered by the parity
+/// check here. Effects without a matching GPU implementation or known CPU/GPU parity stay on CPU.
 #[test]
 fn gpu_effect_chains_match_cpu_render() {
     let mut b = Builder::new(5);
@@ -945,7 +945,8 @@ fn gpu_effect_chains_match_cpu_render() {
         let fx = l.fx.as_ref().unwrap_or_else(|| panic!("V{}: not a GPU effect layer", i + 1));
         assert!(!fx.ops.is_empty());
     }
-    assert!(layers[4].fx.is_none(), "Emboss is rendered on the CPU");
+    let emboss = layers[4].fx.as_ref().expect("Emboss has a GPU kernel");
+    assert!(emboss.ops.iter().any(|op| matches!(op, filmcraft_render::gpufx::FxOp::Emboss { .. })));
     let Some((dev, q)) = device("gpu effect parity", true) else {
         return;
     };

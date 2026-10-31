@@ -44,8 +44,8 @@ use filmcraft_engine::Session;
 use filmcraft_engine::autosave::{AutosaveConfig, default_data_dir};
 use filmcraft_ui_egui::FilmcraftApp;
 use serde_json::json;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// Reverse-DNS app id: Linux `.desktop` file, hicolor icon name and Wayland app id.
 const APP_ID: &str = "ai.storyteller.filmcraft";
@@ -103,6 +103,35 @@ fn main() -> eframe::Result {
         }
     };
     let data_root = launch.data_dir.clone().or_else(default_data_dir);
+    let mut saved_prefs = data_root.as_deref().map(|dir| filmcraft_engine::autosave::Preferences::load(&dir.join("preferences.json"))).unwrap_or_default();
+    // Preserve the agent-driven focus/event-loop behavior only for explicit CLI/environment
+    // control-server launches. Settings autostart keeps an ordinary interactive desktop window.
+    let explicit_agent_mode = launch.control_port.is_some();
+    let auto_control_port = (!explicit_agent_mode && saved_prefs.control.autostart).then_some(saved_prefs.control.port);
+    let mut effective_launch = launch.clone();
+    let mut auto_control_token = None;
+    let mut control_startup_error = None;
+    if let Some(port) = auto_control_port {
+        effective_launch.control_port = Some(port);
+        match control_server::token_for_autostart(data_root.as_deref()) {
+            Ok(token) => auto_control_token = Some(token),
+            Err(error) => {
+                log::error!("MCP / Control Server autostart failed: {error}");
+                control_startup_error = Some(error);
+            }
+        }
+    } else if explicit_agent_mode && std::env::var_os("FILMCRAFT_CONTROL_TOKEN").is_none() {
+        // Explicit CLI launches work without requiring users to manually mint/export a secret.
+        // Persist a private token so the separate MCP bridge can authenticate using the documented
+        // token-file flow. If a token environment variable was supplied, keep that contract.
+        match control_server::token_for_autostart(data_root.as_deref()) {
+            Ok(token) => auto_control_token = Some(token),
+            Err(error) => {
+                log::error!("MCP / Control Server startup failed: {error}");
+                control_startup_error = Some(error);
+            }
+        }
+    }
     let log_dir = data_root.as_ref().map(|d| d.join(logging::LOG_DIR));
     log::info!("FilmCraft {} ({} {})", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH);
     // The log file lives next to the crash logs; opened after the arguments, so `--help`,
@@ -130,25 +159,71 @@ fn main() -> eframe::Result {
     // mode, which moves on after starts that died before their window painted (a driver crash),
     // see graphics.rs.
     let backend_override = eframe::wgpu::Backends::from_env();
-    let mut graphics = graphics::GraphicsStart::begin(data_root.as_deref(), backend_override.is_some(), launch.graphics);
-    // The GPU export renderer creates its own wgpu instance with every backend; after a start
-    // fell back, that would load the driver that failed. Exports then composite on the CPU.
-    if graphics.mode() == graphics::Mode::Default {
-        register_gpu_frame_renderer();
+    // An explicit backend in Settings acts like --graphics, except command-line and environment
+    // overrides take precedence. Automatic remains governed by the crash-recovery state.
+    let saved_backend_mode = match saved_prefs.gpu.backend.as_str() {
+        "dx12" => Some(graphics::Mode::Dx12),
+        "vulkan" => Some(graphics::Mode::Vulkan),
+        _ => None,
+    };
+    let backend_from_settings = launch.graphics.is_none() && backend_override.is_none() && saved_backend_mode.is_some();
+    let forced_graphics = launch.graphics.or_else(|| if backend_override.is_none() { saved_backend_mode } else { None });
+    let mut graphics = graphics::GraphicsStart::begin(data_root.as_deref(), backend_override.is_some(), forced_graphics);
+
+    // The export renderer has its own wgpu instance. Apply the same backend, power and cache
+    // preferences; the renderer factory reads these values when an export actually needs a device.
+    if saved_prefs.gpu.export_acceleration && graphics.mode() != graphics::Mode::Software {
+        register_gpu_frame_renderer(
+            export_backend_preference(graphics.mode(), backend_override),
+            &saved_prefs.gpu.power_preference,
+            saved_prefs.gpu.upload_cache_entries as usize,
+            true,
+        );
     }
     let started = loop {
-        let mut options = native_options(launch.control_port.is_some());
-        // Before eframe creates the wgpu instance (e.g. no OpenGL on Windows, see graphics.rs).
-        graphics::apply(&mut options, graphics.mode(), backend_override);
+        let mut options = native_options(explicit_agent_mode);
+        // Preserve the driver's crash-safe backend/adapter policy, applying only the selected
+        // high-performance / low-power preference on top.
+        graphics::apply_with_power_preference(&mut options, graphics.mode(), backend_override, &saved_prefs.gpu.power_preference);
         let app_created = Arc::new(AtomicBool::new(false));
-        let result = eframe::run_native("FilmCraft", options, app_creator(launch.clone(), graphics.clone(), Arc::clone(&app_created)));
+        let result = eframe::run_native(
+            "FilmCraft",
+            options,
+            app_creator(effective_launch.clone(), graphics.clone(), Arc::clone(&app_created), auto_control_token.clone(), control_startup_error.clone()),
+        );
         let app_created = app_created.load(Ordering::Relaxed);
         match &result {
             // wgpu reported the failure (no adapter, device creation failed) before the app
             // existed: try the next mode in this process.
-            Err(e) if !app_created && graphics::is_graphics_failure(e) && graphics.step_down() => {
-                log::warn!("graphics start failed: {e}");
-                continue;
+            Err(e) if !app_created && graphics::is_graphics_failure(e) => {
+                if graphics.step_down() {
+                    log::warn!("graphics start failed: {e}");
+                    if backend_from_settings {
+                        // Store the fallback so the next launch does not retry a backend that failed.
+                        let fallback_backend = backend_preference_for_mode(graphics.mode());
+                        if saved_prefs.gpu.backend != fallback_backend {
+                            match saved_prefs.set("gpu.backend", json!(fallback_backend)) {
+                                Ok(()) => {
+                                    if let Some(dir) = data_root.as_deref()
+                                        && let Err(save_error) = saved_prefs.save(&dir.join("preferences.json"))
+                                    {
+                                        log::warn!("could not save graphics backend fallback preference: {save_error}");
+                                    }
+                                }
+                                Err(save_error) => log::warn!("could not save graphics backend fallback preference: {save_error}"),
+                            }
+                        }
+                    }
+                    if saved_prefs.gpu.export_acceleration {
+                        register_gpu_frame_renderer(
+                            export_backend_preference(graphics.mode(), backend_override),
+                            &saved_prefs.gpu.power_preference,
+                            saved_prefs.gpu.upload_cache_entries as usize,
+                            graphics.mode() != graphics::Mode::Software,
+                        );
+                    }
+                    continue;
+                }
             }
             // Closed before the second frame: the window still came up.
             Ok(()) if app_created => graphics.confirm(),
@@ -192,7 +267,13 @@ fn native_options(agent: bool) -> eframe::NativeOptions {
 
 /// Creates the app once eframe has its window and graphics device; sets `created` when it runs,
 /// and confirms the graphics mode once two frames have painted.
-fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<AtomicBool>) -> eframe::AppCreator<'static> {
+fn app_creator(
+    launch: Launch,
+    graphics: graphics::GraphicsStart,
+    created: Arc<AtomicBool>,
+    auto_control_token: Option<String>,
+    control_startup_error: Option<String>,
+) -> eframe::AppCreator<'static> {
     let Launch { control_port, control_input_only, files, demo, startup_flag, recover, data_dir, graphics: _ } = launch;
     Box::new(move |cc| {
         filmcraft_ui_egui::install_ime_reset_callbacks(&cc.egui_ctx);
@@ -253,6 +334,7 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
                 Err(e) => log::error!("recovery failed: {e}"),
             }
         }
+        let cpu_preview_compositor = session.prefs.gpu.preview_compositor == "cpu";
         let mut app = FilmcraftApp::new(session);
         app.set_startup_update_check(true);
         app.graphics_notice = notice;
@@ -262,8 +344,11 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
         app.integrated_titlebar = cfg!(target_os = "macos");
         if let Some(rs) = cc.wgpu_render_state.clone()
             && std::env::var_os("FILMCRAFT_CPU_COMPOSITE").is_none()
+            && !cpu_preview_compositor
         {
             app.set_wgpu(rs);
+        } else if cpu_preview_compositor {
+            log::info!("CPU compositor selected in Settings; GPU preview compositing is disabled");
         }
         // Keep device selection available even when the default device is unavailable.
         // Settings ▸ Audio Hardware is applied on the first frame (`apply_prefs`).
@@ -346,9 +431,27 @@ fn app_creator(launch: Launch, graphics: graphics::GraphicsStart, created: Arc<A
             app.hooks.menu_changed = Some(update);
             app.ui.show_menu_bar = false;
         }
-        if let Some(port) = control_port {
-            let rx = control_server::start(port, cc.egui_ctx.clone());
-            app = if control_input_only { app.with_control_input_only(rx) } else { app.with_control(rx) };
+        if let Some(error) = control_startup_error {
+            let message = format!("MCP / Control Server autostart failed: {error}. Check Settings → Control & MCP.");
+            log::error!("{message}");
+            app.ui.status = message;
+        } else if let Some(port) = control_port {
+            let started = if let Some(token) = auto_control_token {
+                match control_server::start_managed(port, cc.egui_ctx.clone(), token) {
+                    Ok(rx) => Some(rx),
+                    Err(error) => {
+                        let message = format!("MCP / Control Server could not start on 127.0.0.1:{port}: {error}. Check Settings → Control & MCP.");
+                        log::error!("{message}");
+                        app.ui.status = message;
+                        None
+                    }
+                }
+            } else {
+                Some(control_server::start(port, cc.egui_ctx.clone()))
+            };
+            if let Some(rx) = started {
+                app = if control_input_only { app.with_control_input_only(rx) } else { app.with_control(rx) };
+            }
         }
         Ok(Box::new(app))
     })
@@ -412,10 +515,68 @@ impl filmcraft_export::FrameRenderer for GpuFrameRenderer {
     }
 }
 
-fn register_gpu_frame_renderer() {
-    filmcraft_export::register_frame_renderer(|| {
-        filmcraft_gpu::ExportRenderer::new().map(|r| Box::new(GpuFrameRenderer(r)) as Box<dyn filmcraft_export::FrameRenderer>)
-    });
+#[derive(Clone, Debug)]
+struct GpuExportOptions {
+    enabled: bool,
+    backend_preference: String,
+    power_preference: String,
+    upload_cache_entries: usize,
+}
+
+impl Default for GpuExportOptions {
+    fn default() -> Self {
+        Self { enabled: false, backend_preference: "auto".into(), power_preference: "highPerformance".into(), upload_cache_entries: 24 }
+    }
+}
+
+static GPU_EXPORT_OPTIONS: OnceLock<Mutex<GpuExportOptions>> = OnceLock::new();
+
+fn gpu_export_options() -> &'static Mutex<GpuExportOptions> {
+    GPU_EXPORT_OPTIONS.get_or_init(|| Mutex::new(GpuExportOptions::default()))
+}
+
+/// The export registry requires a function pointer, not a capturing closure. Read the current
+/// settings when the export renderer is created.
+fn gpu_frame_renderer_factory() -> Option<Box<dyn filmcraft_export::FrameRenderer>> {
+    let options = gpu_export_options().lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if !options.enabled {
+        return None;
+    }
+    filmcraft_gpu::ExportRenderer::new_with_preferences(&options.backend_preference, &options.power_preference, options.upload_cache_entries)
+        .map(|r| Box::new(GpuFrameRenderer(r)) as Box<dyn filmcraft_export::FrameRenderer>)
+}
+
+fn backend_preference_for_mode(mode: graphics::Mode) -> &'static str {
+    match mode {
+        graphics::Mode::Default => "auto",
+        graphics::Mode::Dx12 => "dx12",
+        graphics::Mode::Vulkan => "vulkan",
+        graphics::Mode::Software => "auto",
+    }
+}
+
+fn export_backend_preference(mode: graphics::Mode, backend_override: Option<eframe::wgpu::Backends>) -> &'static str {
+    if let Some(backend) = backend_override {
+        if backend == eframe::wgpu::Backends::DX12 {
+            return "dx12";
+        }
+        if backend == eframe::wgpu::Backends::VULKAN {
+            return "vulkan";
+        }
+    }
+    backend_preference_for_mode(mode)
+}
+
+fn register_gpu_frame_renderer(backend_preference: &str, power_preference: &str, upload_cache_entries: usize, enabled: bool) {
+    // The export GPU device is created lazily on its first frame. Keep a bounded shared settings
+    // snapshot; the registry uses a non-capturing factory because it requires a function pointer.
+    let mut options = gpu_export_options().lock().unwrap_or_else(|e| e.into_inner());
+    options.enabled = enabled;
+    options.backend_preference = backend_preference.to_string();
+    options.power_preference = power_preference.to_string();
+    options.upload_cache_entries = upload_cache_entries.clamp(8, 64);
+    drop(options);
+    filmcraft_export::register_frame_renderer(gpu_frame_renderer_factory);
 }
 
 /// Put the OS hardware video decoders in front of our own. Registered in a statement of its own:

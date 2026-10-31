@@ -1,4 +1,4 @@
-//! The Settings dialog (app menu ▸ Settings ▸ `<category>`; Edit ▸ Preferences in the in-window
+//! The Settings dialog (app menu ▸ Settings ▸ <category>; Edit ▸ Preferences in the in-window
 //! menu bar; General is Cmd+,). One window titled "Preferences": the category list on the left,
 //! the category's fields on the right, Help / Reset… / Cancel / OK at the bottom. The page layout
 //! comes from the engine's field schema ([`filmcraft_engine::settings::categories`]); edits go to a
@@ -303,7 +303,7 @@ fn appearance_modes(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft) 
     let mode = choice_text(get(&d.values, key));
     ui.horizontal(|ui| {
         field_label(ui, "Appearance Mode");
-        if let Some(v) = combo(app, ui, key, "Appearance Mode", &mode, &static_opts(settings::APPEARANCE_MODES), 200.0) {
+        if let Some(v) = combo(app, ui, key, &mode, &static_opts(settings::APPEARANCE_MODES), 200.0) {
             put(&mut d.values, key, json!(v));
         }
     });
@@ -428,12 +428,12 @@ fn choice_text(v: &Value) -> String {
 }
 
 /// A dropdown of (value, label) options; returns the chosen value.
-fn combo(app: &mut FilmcraftApp, ui: &mut Ui, key: &str, label: &str, current: &str, opts: &[(String, String)], width: f32) -> Option<String> {
+fn combo(app: &mut FilmcraftApp, ui: &mut Ui, key: &str, current: &str, opts: &[(String, String)], width: f32) -> Option<String> {
     let shown = opts.iter().find(|o| o.0 == current).map(|o| o.1.clone()).unwrap_or_else(|| current.to_string());
     let mut chosen = None;
     let mut items: Vec<(String, Rect, String)> = Vec::new();
     // the current choice is cut to the box's width (the open list shows it whole)
-    let r = craft_ui::ComboBox::from_id_salt(("settings", key))
+    let r = egui::ComboBox::from_id_salt(("settings", key))
         .selected_text(RichText::new(crate::i18n::t(&shown)).size(12.5))
         .width(width.min(ui.available_width()))
         .truncate()
@@ -447,10 +447,7 @@ fn combo(app: &mut FilmcraftApp, ui: &mut Ui, key: &str, label: &str, current: &
                 }
             }
         });
-    // The accessible name is the field's label, while the automation label stays the selected
-    // value so `ui.elements` reports what the dropdown shows.
-    let response = crate::widgets::accessible_name(r.response, crate::i18n::t(label));
-    app.auto.add(&format!("settings.{key}"), response.rect, &shown);
+    app.auto.add(&format!("settings.{key}"), r.response.rect, &shown);
     for (id, rect, l) in items {
         app.auto.add(&id, rect, &l);
     }
@@ -525,13 +522,13 @@ fn draw_field(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, f: &Fi
                     if let Some(x) = number(app, ui, f.key, cur.as_f64().unwrap_or(1.0), range, decimals, f.label) {
                         put(&mut d.values, f.key, json!(if u == "frames" { x.round() } else { x }));
                     }
-                    if let Some(v) = combo(app, ui, unit_key, f.label, &u, &static_opts(settings::DURATION_UNITS), 90.0) {
+                    if let Some(v) = combo(app, ui, unit_key, &u, &static_opts(settings::DURATION_UNITS), 90.0) {
                         put(&mut d.values, unit_key, json!(v));
                     }
                 }
                 Kind::Choice(opts) => {
                     field_label(ui, f.label);
-                    if let Some(v) = combo(app, ui, f.key, f.label, &choice_text(&cur), &static_opts(opts), 300.0) {
+                    if let Some(v) = combo(app, ui, f.key, &choice_text(&cur), &static_opts(opts), 300.0) {
                         let x = if cur.is_number() { v.parse::<u64>().map(Value::from).unwrap_or(json!(v)) } else { json!(v) };
                         put(&mut d.values, f.key, x);
                     }
@@ -539,7 +536,7 @@ fn draw_field(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, f: &Fi
                 Kind::Device(list) => {
                     field_label(ui, f.label);
                     let opts = device_opts(app, d, list);
-                    if let Some(v) = combo(app, ui, f.key, f.label, &choice_text(&cur), &opts, 300.0) {
+                    if let Some(v) = combo(app, ui, f.key, &choice_text(&cur), &opts, 300.0) {
                         put(&mut d.values, f.key, json!(v));
                     }
                 }
@@ -552,7 +549,7 @@ fn draw_field(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, f: &Fi
                         let c = settings::parse_hex(&choice_text(get(&d.values, &format!("labels.colors.{}.color", settings::label_id(l))))).unwrap_or(l.rgb());
                         ui.painter().rect_filled(sw, 2.0, Color32::from_rgb(c[0], c[1], c[2]));
                     }
-                    if let Some(v) = combo(app, ui, f.key, f.label, &cur_s, &opts, 160.0) {
+                    if let Some(v) = combo(app, ui, f.key, &cur_s, &opts, 160.0) {
                         put(&mut d.values, f.key, json!(v));
                     }
                 }
@@ -573,7 +570,7 @@ fn draw_field(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, f: &Fi
                     } else {
                         ui.available_width().clamp(60.0, 220.0)
                     };
-                    let r = crate::widgets::accessible_name(ui.add(egui::TextEdit::singleline(&mut s).desired_width(width).hint_text(hint)), f.label);
+                    let r = ui.add(egui::TextEdit::singleline(&mut s).desired_width(width).hint_text(hint));
                     app.auto.add(&format!("settings.{}", f.key), r.rect, f.label);
                     if r.changed() {
                         put(&mut d.values, f.key, json!(s));
@@ -611,12 +608,9 @@ fn color_field(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, key: 
     }
     // While the field has focus it shows what is typed, even when that is not a colour yet (one
     // character into `#2f6bdf`); each valid colour is kept as it comes. Leaving shows the kept one.
-    let draft_id = egui::Id::unique(("settings-hex", key));
+    let draft_id = egui::Id::new(("settings-hex", key));
     let mut text = ui.data(|m| m.get_temp::<String>(draft_id)).unwrap_or_else(|| choice_text(get(&d.values, key)));
-    let t = crate::widgets::accessible_name(
-        ui.add(egui::TextEdit::singleline(&mut text).desired_width(70.0).font(egui::TextStyle::Monospace)),
-        format!("{label} hex"),
-    );
+    let t = ui.add(egui::TextEdit::singleline(&mut text).desired_width(70.0).font(egui::TextStyle::Monospace));
     app.auto.add(&format!("settings.{key}.hex"), t.rect, label);
     if t.has_focus() {
         ui.data_mut(|m| m.insert_temp(draft_id, text.clone()));
@@ -645,7 +639,7 @@ fn label_presets(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft) {
         ui.horizontal(|ui| {
             let opts: Vec<(String, String)> = presets.iter().map(|p| (p.name.clone(), p.name.clone())).collect();
             let shown = if modified { tlf!("{name} (Modified)", name = labels.preset) } else { labels.preset.clone() };
-            if let Some(name) = combo(app, ui, "labels.preset", "Label Color Presets", &shown, &opts, 150.0) {
+            if let Some(name) = combo(app, ui, "labels.preset", &shown, &opts, 150.0) {
                 pick = presets.iter().find(|p| p.name == name).cloned();
             }
             if preset_button(app, ui, "revert", Icon::Reset, tl!("Revert to the preset's colors and names"), modified) {
@@ -736,10 +730,7 @@ fn custom(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, name: &str
                         let id = settings::label_id(*l);
                         let nk = format!("labels.colors.{id}.name");
                         let mut name = choice_text(get(&d.values, &nk));
-                        let r = crate::widgets::accessible_name(
-                            ui.add_sized(vec2(136.0, 22.0), egui::TextEdit::singleline(&mut name)),
-                            format!("{} name", l.name()),
-                        );
+                        let r = ui.add_sized(vec2(136.0, 22.0), egui::TextEdit::singleline(&mut name));
                         app.auto.add(&format!("settings.{nk}"), r.rect, l.name());
                         if r.changed() {
                             put(&mut d.values, &nk, json!(name));
@@ -760,6 +751,72 @@ fn custom(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, name: &str
             let (used, budget) = app.frames.cache_usage();
             note(ui, &t, &tlf!("Decoded frames held for the monitors and thumbnails: {used} of {budget}.", used = mb(used as u64), budget = mb(budget as u64)));
             note(ui, &t, tl!("FilmCraft keeps the rest of the RAM free for other applications."));
+        }
+        "gpuInfo" => {
+            let mode = choice_text(get(&d.values, "gpu.previewCompositor"));
+            if let Some(g) = app.gpu.as_ref() {
+                let adapter = g.render_state.adapter.get_info();
+                note(ui, &t, &format!("GPU compositor active: {} ({:?}, {:?})", adapter.name, adapter.backend, adapter.device_type));
+                let outputs = g
+                    .output_sizes()
+                    .into_iter()
+                    .map(|(slot, (width, height))| {
+                        let name = match slot {
+                            0 => "Program".to_owned(),
+                            1 => "Source".to_owned(),
+                            _ => format!("Monitor {slot}"),
+                        };
+                        format!("{name} {width}×{height}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let outputs = if outputs.is_empty() { "not rendered yet".to_owned() } else { outputs };
+                note(ui, &t, &format!("Last compositor call: {:.2} ms · outputs: {} · maximum texture side: {}", g.last_ms, outputs, g.max_texture));
+                note(ui, &t, &format!("GPU transitions: {} · CPU-fallback transitions: {}", g.compositor.gpu_transitions, g.compositor.cpu_transitions));
+                note(
+                    ui,
+                    &t,
+                    &format!(
+                        "Upload cache: {} of {} entries · data uploaded since compositor creation: {}",
+                        g.compositor.upload_cache_entries(),
+                        g.compositor.upload_cache_limit(),
+                        mb(g.compositor.uploaded_bytes)
+                    ),
+                );
+            } else if mode == "cpu" {
+                note(ui, &t, "CPU compositor selected. The choice applies on the next launch.");
+            } else {
+                note(ui, &t, "GPU compositor is not active in this session; previews use CPU compositing or GPU initialization has not completed.");
+            }
+            let export_timing = filmcraft_gpu::export_renderer::timing::get();
+            note(
+                ui,
+                &t,
+                &format!(
+                    "GPU export totals: {} frame(s) · submit {:.1} ms · device/map wait {:.1} ms · pixel conversion {:.1} ms",
+                    export_timing.frames,
+                    export_timing.submit.as_secs_f64() * 1000.0,
+                    export_timing.map_wait.as_secs_f64() * 1000.0,
+                    export_timing.convert.as_secs_f64() * 1000.0
+                ),
+            );
+            note(
+                ui,
+                &t,
+                "GPU utilization percentages and driver memory residency are not exposed consistently across platforms by wgpu; the values above are compositor timing, cache, export and fallback telemetry.",
+            );
+        }
+        "controlInfo" => {
+            let enabled = get(&d.values, "control.autostart").as_bool().unwrap_or(false);
+            let port = get(&d.values, "control.port").as_u64().unwrap_or(9876);
+            let state = if enabled { "Autostart is enabled for the next launch." } else { "Autostart is disabled." };
+            note(ui, &t, state);
+            note(ui, &t, &format!("Local endpoint: 127.0.0.1:{port}"));
+            note(
+                ui,
+                &t,
+                "The MCP bridge reads the same private control-token file from the FilmCraft data directory. The token itself is never displayed here.",
+            );
         }
         "mediaCacheInfo" => {
             if d.cache_info.is_null() {
@@ -854,11 +911,11 @@ fn rows(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, list: &[Row]
 /// Draw the dialog; returns whether it stays open.
 pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) -> bool {
     let Some(mut d) = app.ui.settings.take() else { return false };
-    crate::widgets::revert_drag_on_escape(ctx, egui::Id::unique("settings-dialog-before-drag"), &mut d);
+    crate::widgets::revert_drag_on_escape(ctx, egui::Id::new("settings-dialog-before-drag"), &mut d);
     let t = app.tokens;
     let mut close = false;
     let mut apply = false;
-    let resp = egui::Modal::new(egui::Id::unique("settings-modal")).frame(modal_frame(&t)).show(ctx, |ui| {
+    let resp = egui::Modal::new(egui::Id::new("settings-modal")).frame(modal_frame(&t)).show(ctx, |ui| {
         ui.set_width(W);
         // title bar (Premiere keeps "Preferences" as the window title)
         let (bar, _) = ui.allocate_exact_size(vec2(W, 30.0), Sense::hover());
@@ -873,7 +930,7 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) -> bool {
             ui.painter().rect(list, 2.0, t.field_bg, Stroke::new(1.0, t.separator), egui::StrokeKind::Inside);
             for (i, c) in settings::categories().iter().enumerate() {
                 let row = Rect::from_min_size(list.min + vec2(1.0, 1.0 + i as f32 * ROW_H), vec2(LIST_W - 2.0, ROW_H));
-                let r = ui.interact(row, egui::Id::unique(("settings-cat", c.id)), Sense::click());
+                let r = ui.interact(row, egui::Id::new(("settings-cat", c.id)), Sense::click());
                 let sel = d.page == c.id;
                 if sel {
                     ui.painter().rect_filled(row, 0.0, t.row_alt);

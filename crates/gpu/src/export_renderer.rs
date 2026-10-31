@@ -98,21 +98,67 @@ pub struct ExportRenderer {
 }
 
 impl ExportRenderer {
-    /// The off-screen device, or `None` when this host has no usable adapter or this build no
-    /// wgpu backend.
+    /// The off-screen device, or None when this host has no usable adapter or this build no
+    /// wgpu backend. Defaults preserve automatic backend selection and the 24-entry cache.
     pub fn new() -> Option<Self> {
-        // `None` is kept too: a machine without an adapter does not search again on every export
+        Self::new_with_preferences("auto", "highPerformance", 24)
+    }
+
+    /// Use the saved desktop backend, power preference and bounded upload-cache size. The export
+    /// device is shared process-wide and created once, so these options are captured by its first creation.
+    pub fn new_with_preferences(backend_preference: &str, power_preference: &str, upload_cache_limit: usize) -> Option<Self> {
+        // Keep None too: a machine without an adapter does not search again on every export.
         static SHARED: std::sync::OnceLock<Option<(wgpu::Instance, wgpu::Device, wgpu::Queue)>> = std::sync::OnceLock::new();
+        let preference = match power_preference {
+            "lowPower" => wgpu::PowerPreference::LowPower,
+            "none" => wgpu::PowerPreference::None,
+            _ => wgpu::PowerPreference::HighPerformance,
+        };
         let (instance, device, queue) = SHARED
             .get_or_init(|| {
-                // A build without a wgpu backend for this platform (`cargo build -p filmcraft-cli`
-                // alone: this crate asks for none) has no GPU to offer, and `Instance::default()`
-                // panics there.
                 if wgpu::Instance::enabled_backend_features().is_empty() {
                     return None;
                 }
-                let instance = wgpu::Instance::default();
-                let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+                let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    descriptor = descriptor.with_env();
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    descriptor.backends = wgpu::Backends::BROWSER_WEBGPU;
+                }
+
+                // WGPU_BACKEND remains authoritative. In its absence, follow the saved selection;
+                // Windows Auto matches the window and excludes OpenGL because some GL drivers crash
+                // during initialization.
+                if std::env::var_os("WGPU_BACKEND").is_none() {
+                    match backend_preference {
+                        "dx12" => descriptor.backends = wgpu::Backends::DX12,
+                        "vulkan" => descriptor.backends = wgpu::Backends::VULKAN,
+                        "auto" if cfg!(target_os = "windows") => descriptor.backends = wgpu::Backends::PRIMARY,
+                        _ => {}
+                    }
+                }
+
+                // Match the preview window's compiler behavior so WGSL compute effects work on DX12.
+                #[cfg(target_os = "windows")]
+                {
+                    let bundled_dxc =
+                        std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join("dxcompiler.dll"))).filter(|path| path.is_file());
+                    let shader_compiler = match bundled_dxc {
+                        Some(path) => wgpu::Dx12Compiler::DynamicDxc { dxc_path: path.to_string_lossy().into_owned() },
+                        None => wgpu::Dx12Compiler::Auto,
+                    };
+                    descriptor.backend_options.dx12.shader_compiler = shader_compiler.with_env();
+                }
+
+                let selected_backends = descriptor.backends;
+                let instance = wgpu::Instance::new(descriptor);
+                // Use the same duplicate-driver-aware picker as the preview window. RequestAdapter
+                // alone can choose a stale entry when one GPU appears via multiple Vulkan drivers.
+                let adapters = pollster::block_on(instance.enumerate_adapters(selected_backends));
+                let adapter = crate::adapter::pick(&adapters, None, preference).ok()?;
                 let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
                 // wgpu's default handler panics on a validation or out-of-memory error; log it and
                 // send the remaining frames to the CPU instead.
@@ -125,7 +171,8 @@ impl ExportRenderer {
         if device_failed() {
             return None;
         }
-        let compositor = GpuCompositor::new(&device, &queue);
+        let mut compositor = GpuCompositor::new(&device, &queue);
+        compositor.set_upload_cache_limit(upload_cache_limit);
         Some(Self { _instance: instance, device, queue, compositor })
     }
 
@@ -186,7 +233,7 @@ mod tests {
             p.add_item(
                 &info.name.clone(),
                 Label::Iris,
-                ItemKind::Media(Box::new(MediaClip {
+                ItemKind::Media(MediaClip {
                     media: MediaRef::Generator(g.generator.clone()),
                     info,
                     interpret: Default::default(),
@@ -196,7 +243,7 @@ mod tests {
                     offline: false,
                     proxy: None,
                     identity: None,
-                })),
+                }),
                 None,
             )
         };
