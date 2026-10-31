@@ -96,6 +96,53 @@ pub struct Rgba {
     pub px: Vec<u8>,
 }
 
+impl Rgba {
+    /// The frame as a texture image: opaque (the picture over black), or with its alpha, so what
+    /// is painted under it shows through its transparent areas.
+    pub fn color_image(&self, alpha: bool) -> egui::ColorImage {
+        let pixels = if alpha {
+            self.px.as_chunks::<4>().0.iter().map(|p| gamma_premultiplied(*p)).collect()
+        } else {
+            self.px.as_chunks::<4>().0.iter().map(|p| egui::Color32::from_rgb(p[0], p[1], p[2])).collect()
+        };
+        egui::ColorImage::new([self.w, self.h], pixels)
+    }
+}
+
+/// A frame pixel (sRGB of the linear color premultiplied by alpha) as egui's color, which is the
+/// sRGB of the straight color multiplied by alpha.
+fn gamma_premultiplied([r, g, b, a]: [u8; 4]) -> egui::Color32 {
+    match a {
+        255 => egui::Color32::from_rgb(r, g, b),
+        0 => egui::Color32::TRANSPARENT,
+        _ => {
+            let straight = |v: u8| straight_srgb(a, v);
+            egui::Color32::from_rgba_unmultiplied(straight(r), straight(g), straight(b), a)
+        }
+    }
+}
+
+/// The sRGB of the straight color whose premultiplied value is sRGB `v` at alpha `a`, from a table
+/// made on first use: a frame with partial alpha would otherwise take two `powf` per channel per
+/// pixel on every upload.
+fn straight_srgb(a: u8, v: u8) -> u8 {
+    static TABLE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        use egui::ecolor::{gamma_u8_from_linear_f32, linear_f32_from_gamma_u8};
+        let mut t = vec![0u8; 256 * 256];
+        for a in 1..=255u8 {
+            let k = f32::from(a) / 255.0;
+            for v in 0..=255u8 {
+                if let Some(x) = t.get_mut(usize::from(a) * 256 + usize::from(v)) {
+                    *x = gamma_u8_from_linear_f32((linear_f32_from_gamma_u8(v) / k).min(1.0));
+                }
+            }
+        }
+        t
+    });
+    table.get(usize::from(a) * 256 + usize::from(v)).copied().unwrap_or(v)
+}
+
 struct Job {
     key: FrameKey,
     queued: Instant,
@@ -379,6 +426,16 @@ pub struct FrameServer {
     repaint: Arc<Mutex<Option<Box<dyn Fn() + Send + Sync>>>>,
 }
 
+struct FrameRequest<'a> {
+    key: FrameKey,
+    time: Tick,
+    scale: f32,
+    project: &'a Arc<Project>,
+    priority: u32,
+    prefetch: bool,
+    catch_up: Option<Tick>,
+}
+
 /// Frames queued ahead of the playhead while playing (and how far ahead a queued job may be
 /// before it is dropped as stale).
 pub fn prefetch_depth(speed: f64) -> i64 {
@@ -547,10 +604,11 @@ impl FrameServer {
     /// non-reference pictures, while nearby frames stay decoded (and cached) for scrubbing back.
     pub fn request(&self, key: FrameKey, time: Tick, scale: f32, project: &Arc<Project>, prio: u32) {
         let late = (prio == 0).then(|| Tick::from_seconds_f64(SCRUB_KEEP_S));
-        self.request_job(key, time, scale, project, prio, false, late);
+        self.request_job(FrameRequest { key, time, scale, project, priority: prio, prefetch: false, catch_up: late });
     }
 
-    fn request_job(&self, key: FrameKey, time: Tick, scale: f32, project: &Arc<Project>, prio: u32, prefetch: bool, catch_up: Option<Tick>) {
+    fn request_job(&self, request: FrameRequest<'_>) {
+        let FrameRequest { key, time, scale, project, priority: prio, prefetch, catch_up } = request;
         let hit = || self.shared.stats.lock().unwrap_or_else(|e| e.into_inner()).request_hits += 1;
         if self.shared.done.lock().unwrap_or_else(|e| e.into_inner()).map.contains_key(&key)
             || self.shared.plans.lock().unwrap_or_else(|e| e.into_inner()).map.contains_key(&key)
@@ -612,7 +670,15 @@ impl FrameServer {
         let (lead, stride) = if preroll { (1, 1) } else { playback_plan(self.render_cost(), fps, self.shared.workers) };
         if lead <= 1 {
             // the frame due now; once the clock runs, the frames before it are late
-            self.request_job(key, rate.tick_of(key.frame), scale, project, 0, false, (!preroll && dir > 0).then_some(Tick::ZERO));
+            self.request_job(FrameRequest {
+                key,
+                time: rate.tick_of(key.frame),
+                scale,
+                project,
+                priority: 0,
+                prefetch: false,
+                catch_up: (!preroll && dir > 0).then_some(Tick::ZERO),
+            });
         }
         // During preroll the clock has not started: only the frames that gate start, not a
         // prefetch run that walks the rest of a LongGOP and evicts the playhead pictures.
@@ -622,7 +688,15 @@ impl FrameServer {
             if f >= 0 {
                 // forward play: frames before the playhead are late (reverse play skips nothing)
                 let late = (!preroll && dir > 0).then(|| rate.tick_of(f) - rate.tick_of(key.frame));
-                self.request_job(FrameKey { frame: f, ..key }, rate.tick_of(f), scale, project, i as u32 + 1, true, late);
+                self.request_job(FrameRequest {
+                    key: FrameKey { frame: f, ..key },
+                    time: rate.tick_of(f),
+                    scale,
+                    project,
+                    priority: i as u32 + 1,
+                    prefetch: true,
+                    catch_up: late,
+                });
             }
         }
         let (target, rev, cur) = (key.target, key.revision, key.frame);
