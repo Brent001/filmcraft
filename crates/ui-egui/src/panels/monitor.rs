@@ -25,6 +25,9 @@ pub enum Which {
     Program,
 }
 
+// This is the monitor's frame-level UI coordinator: it intentionally keeps the
+// drawing, interaction, and playback state transitions together for one monitor pass.
+#[allow(clippy::cognitive_complexity)]
 pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, which: Which) {
     let t = app.tokens;
     let ctx = ui.ctx().clone();
