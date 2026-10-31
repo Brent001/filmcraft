@@ -96,6 +96,53 @@ pub struct Rgba {
     pub px: Vec<u8>,
 }
 
+impl Rgba {
+    /// The frame as a texture image: opaque (the picture over black), or with its alpha, so what
+    /// is painted under it shows through its transparent areas.
+    pub fn color_image(&self, alpha: bool) -> egui::ColorImage {
+        let pixels = if alpha {
+            self.px.as_chunks::<4>().0.iter().map(|p| gamma_premultiplied(*p)).collect()
+        } else {
+            self.px.as_chunks::<4>().0.iter().map(|p| egui::Color32::from_rgb(p[0], p[1], p[2])).collect()
+        };
+        egui::ColorImage::new([self.w, self.h], pixels)
+    }
+}
+
+/// A frame pixel (sRGB of the linear color premultiplied by alpha) as egui's color, which is the
+/// sRGB of the straight color multiplied by alpha.
+fn gamma_premultiplied([r, g, b, a]: [u8; 4]) -> egui::Color32 {
+    match a {
+        255 => egui::Color32::from_rgb(r, g, b),
+        0 => egui::Color32::TRANSPARENT,
+        _ => {
+            let straight = |v: u8| straight_srgb(a, v);
+            egui::Color32::from_rgba_unmultiplied(straight(r), straight(g), straight(b), a)
+        }
+    }
+}
+
+/// The sRGB of the straight color whose premultiplied value is sRGB `v` at alpha `a`, from a table
+/// made on first use: a frame with partial alpha would otherwise take two `powf` per channel per
+/// pixel on every upload.
+fn straight_srgb(a: u8, v: u8) -> u8 {
+    static TABLE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        use egui::ecolor::{gamma_u8_from_linear_f32, linear_f32_from_gamma_u8};
+        let mut t = vec![0u8; 256 * 256];
+        for a in 1..=255u8 {
+            let k = f32::from(a) / 255.0;
+            for v in 0..=255u8 {
+                if let Some(x) = t.get_mut(usize::from(a) * 256 + usize::from(v)) {
+                    *x = gamma_u8_from_linear_f32((linear_f32_from_gamma_u8(v) / k).min(1.0));
+                }
+            }
+        }
+        t
+    });
+    table.get(usize::from(a) * 256 + usize::from(v)).copied().unwrap_or(v)
+}
+
 struct Job {
     key: FrameKey,
     queued: Instant,
