@@ -237,3 +237,25 @@ impl Image {
         out
     }
 }
+
+    /// Opaque monitor RGB over black with the source pixel's alpha retained for transparent views.
+    /// RGB bytes are identical to the opaque conversion; only the fourth byte preserves transparency.
+    pub fn over_black_with_alpha_rgba8(&self) -> Vec<u8> {
+        let mut out = vec![0u8; self.w * self.h * 4];
+        let context = filmcraft_media::cancel::Context::current();
+        out.par_chunks_mut(self.w * 4).zip(self.px.par_chunks(self.w * 4)).for_each(|(o, s)| {
+            context.clone().run(|| {
+                if filmcraft_media::cancel::cancelled() {
+                    return;
+                }
+                for (o, s) in o.as_chunks_mut::<4>().0.iter_mut().zip(s.as_chunks::<4>().0) {
+                    o[0] = filmcraft_color::linear_to_srgb_u8(s[0]);
+                    o[1] = filmcraft_color::linear_to_srgb_u8(s[1]);
+                    o[2] = filmcraft_color::linear_to_srgb_u8(s[2]);
+                    o[3] = (s[3].clamp(0.0, 1.0) * 255.0).round() as u8;
+                }
+            });
+        });
+        out
+    }
+}
