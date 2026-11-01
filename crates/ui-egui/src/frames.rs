@@ -35,6 +35,10 @@ pub enum Target {
     MulticamGrid(ItemId, u8, u16),
     /// One angle of a multi-camera source (Edit Cameras thumbnails).
     MulticamAngle(ItemId, u32),
+    /// Composite of a sequence rendered live, never from a render preview: previews are
+    /// flattened over black, and the monitors' Transparency Grid and Alpha display mode need the
+    /// frame's alpha.
+    SequenceLive(ItemId),
 }
 
 /// Item jobs at this priority or a larger number are background work: thumbnails of the Project
@@ -1082,7 +1086,7 @@ fn render_job(job: &Job, pool: &Arc<MediaPool>, services: &Arc<dyn Services>, pr
     let provider = provider(job, pool, services);
     let opts = filmcraft_render::RenderOptions { scale: job.scale, captions: true, ..Default::default() };
     let img = match job.key.target {
-        Target::Sequence(seq) | Target::SequencePlan(seq) => Some(filmcraft_render::render_sequence(&job.project, seq, job.time, opts, &provider)),
+        Target::Sequence(seq) | Target::SequencePlan(seq) | Target::SequenceLive(seq) => Some(filmcraft_render::render_sequence(&job.project, seq, job.time, opts, &provider)),
         Target::Item(item) => filmcraft_render::render_item(&job.project, item, job.time, job.scale, &provider),
         Target::ItemPlan(item) => filmcraft_render::render_item(&job.project, item, job.time, job.scale, &provider),
         Target::MulticamGrid(item, side, page) => {
