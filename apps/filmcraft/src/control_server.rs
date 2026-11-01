@@ -10,8 +10,8 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::Path;
 use std::net::{TcpListener, TcpStream};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -115,7 +115,6 @@ fn matching_token(saved: String, preferred: Option<&str>) -> Result<String, Stri
     Ok(saved)
 }
 
-
 /// Why the control server is not serving although `--control` was given (#3436).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DisabledWhy {
@@ -152,11 +151,7 @@ impl DisabledWhy {
 
 /// Start the Settings-managed server with a private per-user token. It shares the readiness
 /// handshake with the explicit CLI server, but reports bind/token failures to the desktop.
-pub fn start_managed(
-    port: u16,
-    ctx: egui::Context,
-    token: String,
-) -> (Receiver<ControlRequest>, Arc<AtomicBool>, Option<DisabledWhy>) {
+pub fn start_managed(port: u16, ctx: egui::Context, token: String) -> (Receiver<ControlRequest>, Arc<AtomicBool>, Option<DisabledWhy>) {
     let (tx, rx) = channel::<ControlRequest>();
     if !valid_token(&token) {
         return (rx, Arc::new(AtomicBool::new(true)), Some(DisabledWhy::Token));
