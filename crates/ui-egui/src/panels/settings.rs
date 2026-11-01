@@ -433,7 +433,7 @@ fn combo(app: &mut FilmcraftApp, ui: &mut Ui, key: &str, current: &str, opts: &[
     let mut chosen = None;
     let mut items: Vec<(String, Rect, String)> = Vec::new();
     // the current choice is cut to the box's width (the open list shows it whole)
-    let r = egui::ComboBox::from_id_salt(("settings", key))
+    let r = craft_ui::ComboBox::from_id_salt(("settings", key))
         .selected_text(RichText::new(crate::i18n::t(&shown)).size(12.5))
         .width(width.min(ui.available_width()))
         .truncate()
@@ -608,7 +608,7 @@ fn color_field(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, key: 
     }
     // While the field has focus it shows what is typed, even when that is not a colour yet (one
     // character into `#2f6bdf`); each valid colour is kept as it comes. Leaving shows the kept one.
-    let draft_id = egui::Id::new(("settings-hex", key));
+    let draft_id = egui::Id::unique(("settings-hex", key));
     let mut text = ui.data(|m| m.get_temp::<String>(draft_id)).unwrap_or_else(|| choice_text(get(&d.values, key)));
     let t = ui.add(egui::TextEdit::singleline(&mut text).desired_width(70.0).font(egui::TextStyle::Monospace));
     app.auto.add(&format!("settings.{key}.hex"), t.rect, label);
@@ -911,11 +911,11 @@ fn rows(app: &mut FilmcraftApp, ui: &mut Ui, d: &mut SettingsDraft, list: &[Row]
 /// Draw the dialog; returns whether it stays open.
 pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) -> bool {
     let Some(mut d) = app.ui.settings.take() else { return false };
-    crate::widgets::revert_drag_on_escape(ctx, egui::Id::new("settings-dialog-before-drag"), &mut d);
+    crate::widgets::revert_drag_on_escape(ctx, egui::Id::unique("settings-dialog-before-drag"), &mut d);
     let t = app.tokens;
     let mut close = false;
     let mut apply = false;
-    let resp = egui::Modal::new(egui::Id::new("settings-modal")).frame(modal_frame(&t)).show(ctx, |ui| {
+    let resp = egui::Modal::new(egui::Id::unique("settings-modal")).frame(modal_frame(&t)).show(ctx, |ui| {
         ui.set_width(W);
         // title bar (Premiere keeps "Preferences" as the window title)
         let (bar, _) = ui.allocate_exact_size(vec2(W, 30.0), Sense::hover());
@@ -930,7 +930,7 @@ pub fn show(app: &mut FilmcraftApp, ctx: &egui::Context) -> bool {
             ui.painter().rect(list, 2.0, t.field_bg, Stroke::new(1.0, t.separator), egui::StrokeKind::Inside);
             for (i, c) in settings::categories().iter().enumerate() {
                 let row = Rect::from_min_size(list.min + vec2(1.0, 1.0 + i as f32 * ROW_H), vec2(LIST_W - 2.0, ROW_H));
-                let r = ui.interact(row, egui::Id::new(("settings-cat", c.id)), Sense::click());
+                let r = ui.interact(row, egui::Id::unique(("settings-cat", c.id)), Sense::click());
                 let sel = d.page == c.id;
                 if sel {
                     ui.painter().rect_filled(row, 0.0, t.row_alt);
