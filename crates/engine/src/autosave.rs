@@ -32,6 +32,9 @@ use web_time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::settings;
 
+/// Per-user credential shared with the local MCP bridge; keep this file private.
+pub const CONTROL_TOKEN_FILE: &str = "control-token";
+
 // ------------------------------------------------------------------ preferences
 
 /// Preferences ▸ Auto Save.
@@ -164,6 +167,10 @@ pub struct Preferences {
     pub auto_save: AutoSavePrefs,
     pub color: settings::ColorPrefs,
     pub graphics: settings::GraphicsPrefs,
+    /// GPU compositor, power preference and GPU export settings.
+    pub gpu: settings::GpuPrefs,
+    /// Authenticated localhost server for desktop MCP bridge clients.
+    pub control: settings::ControlPrefs,
     pub labels: settings::LabelPrefs,
     pub media: MediaPrefs,
     pub media_analysis: settings::MediaAnalysisPrefs,
@@ -194,6 +201,8 @@ impl Default for Preferences {
             auto_save: Default::default(),
             color: Default::default(),
             graphics: Default::default(),
+            gpu: Default::default(),
+            control: Default::default(),
             labels: Default::default(),
             media: Default::default(),
             media_analysis: Default::default(),

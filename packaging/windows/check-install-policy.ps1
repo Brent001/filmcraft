@@ -47,7 +47,7 @@ try {
   $properties = @{}
   foreach ($row in (Read-Rows $database 'SELECT `Property`, `Value` FROM `Property`' 2)) { $properties[$row[0]] = $row[1] }
   $secureProperties = @($properties['SecureCustomProperties'] -split ';')
-  if ('INSTALLFOLDER' -notin $secureProperties) {
+  if ($policy.mode -ne 'perMachine' -and 'INSTALLFOLDER' -notin $secureProperties) {
     throw 'The selected installation folder must survive elevation (secure INSTALLFOLDER).'
   }
   if ($policy.mode -eq 'perUser') {
@@ -77,6 +77,40 @@ try {
       }
     }
     Write-Output 'PASS ArtCraft Launcher: per-user scope, suite folder, remembered/custom paths and existing registration. No installation performed.'
+    return
+  }
+  if ($policy.mode -eq 'perMachine') {
+    if ($properties['ALLUSERS'] -ne '1' -or $properties['MSIINSTALLPERUSER']) {
+      throw 'FilmCraft must remain a per-machine MSI; per-user installation is not part of this package.'
+    }
+    if ($properties['UpgradeCode'].Trim('{}') -ne $policy.upgradeCode) {
+      throw 'The FilmCraft MSI upgrade identity changed.'
+    }
+    $directories = @{}
+    foreach ($row in (Read-Rows $database 'SELECT `Directory`, `Directory_Parent`, `DefaultDir` FROM `Directory`' 3)) {
+      $directories[$row[0]] = @($row[1], $row[2])
+    }
+    if (-not $directories.ContainsKey('INSTALLFOLDER')) {
+      throw 'The FilmCraft installation directory is missing.'
+    }
+    $installFolder = $directories['INSTALLFOLDER']
+    $folderName = [string]$installFolder[1]
+    if ($folderName.Contains('|')) { $folderName = $folderName.Split('|')[-1] }
+    if ($installFolder[0] -ne 'ProgramFiles6432Folder' -or $folderName -ne $policy.name) {
+      throw 'FilmCraft must install under the native Program Files directory.'
+    }
+    $registry = @(Read-Rows $database 'SELECT `Root`, `Key`, `Name`, `Value` FROM `Registry`' 4)
+    if (@($registry | Where-Object { $_[0] -ne '2' }).Count) {
+      throw 'FilmCraft machine-wide registration must remain under HKLM.'
+    }
+    foreach ($entry in $policy.registry) {
+      if (@($registry | Where-Object {
+        $_[0] -eq $entry[0] -and $_[1] -eq $entry[1] -and $_[2] -eq $entry[2] -and $_[3] -eq $entry[3]
+      }).Count -ne 1) {
+        throw 'FilmCraft App Paths registration changed unexpectedly.'
+      }
+    }
+    Write-Output 'PASS FilmCraft: per-machine scope, Program Files location and HKLM App Paths registration. No installation performed.'
     return
   }
   if ($properties['ALLUSERS'] -ne '2' -or $properties['MSIINSTALLPERUSER'] -ne '1') {

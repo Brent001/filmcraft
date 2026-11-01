@@ -256,6 +256,50 @@ impl Default for GraphicsPrefs {
     }
 }
 
+/// Settings ▸ GPU & Performance. These apply at the next desktop launch.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct GpuPrefs {
+    /// `auto`, `dx12` (Windows) or `vulkan` (Windows/Linux).
+    pub backend: String,
+    /// `auto` (GPU with safe CPU fallback) or `cpu`.
+    pub preview_compositor: String,
+    /// `highPerformance`, `lowPower`, or `none`.
+    pub power_preference: String,
+    /// Allow GPU frame rendering during export when the normal graphics backend is active.
+    pub export_acceleration: bool,
+    /// Number of uploaded source-frame textures retained (8–64, default 24).
+    pub upload_cache_entries: u32,
+}
+
+impl Default for GpuPrefs {
+    fn default() -> Self {
+        Self {
+            backend: "auto".into(),
+            preview_compositor: "auto".into(),
+            power_preference: "highPerformance".into(),
+            export_acceleration: true,
+            upload_cache_entries: 24,
+        }
+    }
+}
+
+/// Settings ▸ Control & MCP.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ControlPrefs {
+    /// Start the authenticated localhost control server on normal desktop launches.
+    pub autostart: bool,
+    /// Local TCP port for the desktop-to-MCP bridge.
+    pub port: u16,
+}
+
+impl Default for ControlPrefs {
+    fn default() -> Self {
+        Self { autostart: false, port: 9876 }
+    }
+}
+
 /// Settings ▸ Media Analysis & Transcription.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]

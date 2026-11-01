@@ -34,8 +34,8 @@ pub use labels::{
 };
 pub use media_cache::{CUSTOM_CACHE_FOLDER, cache_usage, clean, enforce_policy, media_cache_dir, previews_root};
 pub use prefs::{
-    AppearancePrefs, AudioHardwarePrefs, ColorPrefs, DEFAULT_HIGHLIGHT, GeneralPrefs, GraphicsPrefs, MediaAnalysisPrefs, MediaCachePrefs, MemoryPrefs,
-    PluginPrefs, TimelinePrefs, timebase_rate,
+    AppearancePrefs, AudioHardwarePrefs, ColorPrefs, ControlPrefs, DEFAULT_HIGHLIGHT, GeneralPrefs, GpuPrefs, GraphicsPrefs, MediaAnalysisPrefs,
+    MediaCachePrefs, MemoryPrefs, PluginPrefs, TimelinePrefs, timebase_rate,
 };
 pub use schema::{
     APPEARANCE_MODES, Category, DARK_THEMES, DURATION_UNITS, DeviceList, Field, Kind, LIGHT_THEMES, Row, UI_SCALES, categories, category, field, fields,
@@ -45,7 +45,7 @@ pub use schema::{
 /// Version of the preferences file layout ([`crate::autosave::Preferences::version`]).
 /// v1: Auto Save, Audio (mixer automation), Playback (pre/postroll), Trim, Media (proxies), guides,
 /// Essential Sound presets. v2: every Settings category.
-pub const PREFS_VERSION: u32 = 2;
+pub const PREFS_VERSION: u32 = 4;
 const SPEAKERS: &[(&str, &str)] = &[("on", "Label speakers"), ("off", "Don't label speakers")];
 const LANGUAGES: &[(&str, &str)] = &[
     ("en", "English"),

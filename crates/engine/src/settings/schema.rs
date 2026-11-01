@@ -187,6 +187,14 @@ const AUTO_SCROLL: &[(&str, &str)] = &[("noScroll", "No Scroll"), ("pageScroll",
 const MOUSE_SCROLL: &[(&str, &str)] = &[("vertical", "Vertical"), ("horizontal", "Horizontal")];
 
 const HW_DECODE: &[(&str, &str)] = &[("auto", "Auto"), ("off", "Off")];
+const GPU_COMPOSITORS: &[(&str, &str)] = &[("auto", "Automatic (GPU, with CPU fallback)"), ("cpu", "CPU only")];
+const GPU_POWER: &[(&str, &str)] = &[("highPerformance", "High performance"), ("lowPower", "Low power"), ("none", "System default")];
+#[cfg(target_os = "windows")]
+const GPU_BACKENDS: &[(&str, &str)] = &[("auto", "Automatic (Vulkan + DirectX 12)"), ("dx12", "DirectX 12"), ("vulkan", "Vulkan")];
+#[cfg(target_os = "linux")]
+const GPU_BACKENDS: &[(&str, &str)] = &[("auto", "Automatic (system default)"), ("vulkan", "Vulkan")];
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+const GPU_BACKENDS: &[(&str, &str)] = &[("auto", "Automatic (system default)")];
 
 const TRACKS: &[(&str, &str)] = &[("useFile", "Use File"), ("mono", "Mono"), ("stereo", "Stereo"), ("5.1", "5.1"), ("adaptive", "Adaptive")];
 
@@ -507,6 +515,38 @@ pub(super) static CATEGORIES: &[Category] = &[
         ],
     },
     Category {
+        id: "gpu",
+        title: "GPU & Performance",
+        rows: &[
+            Row::Custom("gpuInfo"),
+            Row::Group(
+                "Acceleration",
+                &[
+                    f("gpu.backend", "GPU backend", Kind::Choice(GPU_BACKENDS), true),
+                    f("gpu.previewCompositor", "Preview compositor", Kind::Choice(GPU_COMPOSITORS), true),
+                    f("gpu.powerPreference", "GPU power preference", Kind::Choice(GPU_POWER), true),
+                    b("gpu.exportAcceleration", "GPU-accelerated export", true),
+                    f("gpu.uploadCacheEntries", "GPU upload-cache entries", int(8.0, 64.0, "entries"), true),
+                ],
+            ),
+            Row::Note(
+                "GPU backend, preview compositor, power preference, upload-cache limit and GPU export acceleration apply at the next launch. Windows supports Automatic, Vulkan or DirectX 12; Linux supports Automatic or Vulkan. DX12 selects Microsoft's DXC shader compiler when the bundled runtime is present. Failed startup still uses FilmCraft's graphics recovery and CPU fallback.",
+            ),
+        ],
+    },
+    Category {
+        id: "control",
+        title: "Control & MCP",
+        rows: &[
+            Row::Custom("controlInfo"),
+            b("control.autostart", "Enable MCP / Control Server on Startup", true),
+            f("control.port", "MCP / Control Server Port", int(1.0, 65_535.0, "port"), true),
+            Row::Note(
+                "Enabled on the next launch. The server listens only on 127.0.0.1 and requires a private 64-character token. FilmCraft creates a per-user token file automatically; do not share it.",
+            ),
+        ],
+    },
+    Category {
         id: "playback",
         title: "Playback",
         rows: &[
@@ -716,6 +756,7 @@ pub fn migrate(v: &mut Value) {
         a.insert("darkTheme".into(), json!(p.dark_theme));
         a.insert("lightTheme".into(), json!(p.light_theme));
     }
+    m.insert("version".into(), json!(super::PREFS_VERSION));
 }
 
 impl crate::autosave::Preferences {

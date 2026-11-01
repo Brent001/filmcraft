@@ -374,12 +374,18 @@ pub struct FilmcraftApp {
     menu_workspaces: (Vec<String>, String),
 }
 
+#[derive(Default)]
+struct MonitorGpuOutput {
+    texture: Option<egui::TextureId>,
+    last_key: Option<FrameKey>,
+    size: (u32, u32),
+}
+
 pub struct GpuState {
     pub render_state: eframe::egui_wgpu::RenderState,
     pub compositor: filmcraft_gpu::GpuCompositor,
-    pub texture: Option<egui::TextureId>,
-    pub last_key: Option<FrameKey>,
-    pub size: (u32, u32),
+    /// Separate retained presentation for each visible monitor (0 = Program, 1 = Source).
+    outputs: HashMap<u64, MonitorGpuOutput>,
     /// Composite time of the last frame (ms).
     pub last_ms: f32,
     /// Set by the device's uncaptured-error handler: the GPU path failed (validation, lost
@@ -387,4 +393,19 @@ pub struct GpuState {
     pub broken: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Largest texture side the device accepts.
     pub max_texture: u32,
+}
+
+impl GpuState {
+    /// Last completed image for a monitor slot, used while its requested frame is rendering.
+    pub fn last_presentation(&self, slot: u64) -> (Option<egui::TextureId>, Option<FrameKey>) {
+        self.outputs.get(&slot).map_or((None, None), |o| (o.texture, o.last_key))
+    }
+
+    /// Dimensions of monitor outputs that have completed at least one GPU composite.
+    pub fn output_sizes(&self) -> Vec<(u64, (u32, u32))> {
+        let mut sizes =
+            self.outputs.iter().filter(|(_, output)| output.size.0 > 0 && output.size.1 > 0).map(|(slot, output)| (*slot, output.size)).collect::<Vec<_>>();
+        sizes.sort_unstable_by_key(|(slot, _)| *slot);
+        sizes
+    }
 }
