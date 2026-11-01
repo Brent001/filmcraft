@@ -236,7 +236,6 @@ impl Image {
         });
         out
     }
-}
 
     /// Opaque monitor RGB over black with the source pixel's alpha retained for transparent views.
     /// RGB bytes are identical to the opaque conversion; only the fourth byte preserves transparency.
