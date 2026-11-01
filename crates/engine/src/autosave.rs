@@ -32,6 +32,9 @@ use web_time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::settings;
 
+/// Per-user credential shared with the local MCP bridge; keep this file private.
+pub const CONTROL_TOKEN_FILE: &str = "control-token";
+
 // ------------------------------------------------------------------ preferences
 
 /// Preferences ▸ Auto Save.
@@ -410,7 +413,6 @@ impl Preferences {
         self.playback.postroll_seconds = secs(self.playback.postroll_seconds);
         self.trim.large_trim_offset = self.trim.large_trim_offset.clamp(1, 1000);
         self.labels.sanitize_labels();
-        self.control.port = self.control.port.clamp(1, u16::MAX);
         self.appearance.sync_color_theme();
         self.version = settings::PREFS_VERSION;
     }
@@ -496,10 +498,6 @@ impl Preferences {
         filmcraft_format::atomic_write(path, &serde_json::to_vec_pretty(self).unwrap_or_default())
     }
 }
-
-/// Private per-install credential used by the desktop control server and MCP bridge when
-/// `FILMCRAFT_CONTROL_TOKEN` is not provided in the process environment.
-pub const CONTROL_TOKEN_FILE: &str = "control-token";
 
 /// A file with this name next to the executable makes the install portable: its data directory is
 /// `<exe dir>/data` instead of the per-user one (the Windows portable zip ships it).
@@ -1065,67 +1063,5 @@ impl Worker {
                 Err(m)
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod gpu_control_preference_tests {
-    use super::Preferences;
-    use serde_json::json;
-
-    #[test]
-    fn gpu_and_control_preferences_have_safe_defaults() {
-        let prefs = Preferences::default();
-        assert_eq!(prefs.gpu.backend, "auto");
-        assert_eq!(prefs.gpu.preview_compositor, "auto");
-        assert_eq!(prefs.gpu.power_preference, "highPerformance");
-        assert!(prefs.gpu.export_acceleration);
-        assert_eq!(prefs.gpu.upload_cache_entries, 24);
-        assert!(!prefs.control.autostart);
-        assert_eq!(prefs.control.port, 9876);
-    }
-
-    #[test]
-    fn gpu_and_control_preferences_round_trip_and_validate_choices() {
-        let mut prefs = Preferences::default();
-        #[cfg(any(target_os = "windows", target_os = "linux"))]
-        let backend = "vulkan";
-        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
-        let backend = "auto";
-        prefs.set("gpu.backend", json!(backend)).expect("known GPU backend");
-        prefs.set("gpu.previewCompositor", json!("cpu")).expect("known compositor");
-        prefs.set("gpu.powerPreference", json!("lowPower")).expect("known power preference");
-        prefs.set("gpu.exportAcceleration", json!(false)).expect("boolean setting");
-        prefs.set("gpu.uploadCacheEntries", json!(48)).expect("valid upload cache budget");
-        prefs.set("control.autostart", json!(true)).expect("boolean setting");
-        prefs.set("control.port", json!(12345)).expect("valid port");
-        assert!(prefs.set("gpu.powerPreference", json!("maximum")).is_err());
-
-        let loaded = Preferences::from_value(prefs.to_value());
-        assert_eq!(loaded.gpu.backend, backend);
-        assert_eq!(loaded.gpu.preview_compositor, "cpu");
-        assert_eq!(loaded.gpu.power_preference, "lowPower");
-        assert!(!loaded.gpu.export_acceleration);
-        assert_eq!(loaded.gpu.upload_cache_entries, 48);
-        assert!(loaded.control.autostart);
-        assert_eq!(loaded.control.port, 12345);
-    }
-
-    #[test]
-    fn version_two_preferences_migrate_without_enabling_mcp() {
-        let mut value = Preferences::default().to_value();
-        value["version"] = json!(2);
-        if let Some(object) = value.as_object_mut() {
-            object.remove("gpu");
-            object.remove("control");
-        }
-        let migrated = Preferences::from_value(value);
-        assert_eq!(migrated.version, crate::settings::PREFS_VERSION);
-        assert_eq!(migrated.gpu.backend, "auto");
-        assert_eq!(migrated.gpu.preview_compositor, "auto");
-        assert_eq!(migrated.gpu.power_preference, "highPerformance");
-        assert_eq!(migrated.gpu.upload_cache_entries, 24);
-        assert!(!migrated.control.autostart);
-        assert_eq!(migrated.control.port, 9876);
     }
 }

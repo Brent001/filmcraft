@@ -83,7 +83,7 @@ jobs:
     with:
       app-name: filmcraft
       app-title: FilmCraft
-      craft-fonts-ref: abb83316d96aa59c1cf64784289e378fe9fa5695
+      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
       version: ${{ github.event_name == 'workflow_dispatch' && inputs.version || '' }}
       has-macos: ${{ github.event_name == 'workflow_dispatch' && inputs.has-macos }}
       has-windows-x64: ${{ github.event_name == 'push' || inputs.has-windows-x64 }}
