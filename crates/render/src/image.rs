@@ -143,11 +143,14 @@ impl Image {
                         break;
                     }
                     let px = x as f64 + 0.5;
-                let (u, v) =
-                    if axis_aligned { (inv.a * px + inv.e, inv.d * py + inv.f) } else { (inv.a * px + inv.c * py + inv.e, inv.b * px + inv.d * py + inv.f) };
-                if u < -1.0 || v < -1.0 || u > self.w as f64 + 1.0 || v > self.h as f64 + 1.0 {
-                    continue;
-                }
+                    let (u, v) = if axis_aligned {
+                        (inv.a * px + inv.e, inv.d * py + inv.f)
+                    } else {
+                        (inv.a * px + inv.c * py + inv.e, inv.b * px + inv.d * py + inv.f)
+                    };
+                    if u < -1.0 || v < -1.0 || u > self.w as f64 + 1.0 || v > self.h as f64 + 1.0 {
+                        continue;
+                    }
                     let s = self.sample_bilinear(u as f32, v as f32);
                     row[x * 4..x * 4 + 4].copy_from_slice(&s);
                 }
@@ -174,10 +177,10 @@ impl Image {
                         break;
                     }
                     let a = self.get_clamped(2 * x as isize, 2 * y as isize);
-                let b = self.get_clamped(2 * x as isize + 1, 2 * y as isize);
-                let c = self.get_clamped(2 * x as isize, 2 * y as isize + 1);
-                let d = self.get_clamped(2 * x as isize + 1, 2 * y as isize + 1);
-                for k in 0..4 {
+                    let b = self.get_clamped(2 * x as isize + 1, 2 * y as isize);
+                    let c = self.get_clamped(2 * x as isize, 2 * y as isize + 1);
+                    let d = self.get_clamped(2 * x as isize + 1, 2 * y as isize + 1);
+                    for k in 0..4 {
                         row[x * 4 + k] = (a[k] + b[k] + c[k] + d[k]) * 0.25;
                     }
                 }
@@ -227,13 +230,13 @@ impl Image {
                         break;
                     }
                     let p = &mut row[x * 4..x * 4 + 4];
-                let a = p[3];
-                if a <= 1e-6 {
-                    continue;
-                }
-                let c = f([p[0] / a, p[1] / a, p[2] / a], x, y);
-                p[0] = c[0] * a;
-                p[1] = c[1] * a;
+                    let a = p[3];
+                    if a <= 1e-6 {
+                        continue;
+                    }
+                    let c = f([p[0] / a, p[1] / a, p[2] / a], x, y);
+                    p[0] = c[0] * a;
+                    p[1] = c[1] * a;
                     p[2] = c[2] * a;
                 }
             });
